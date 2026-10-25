@@ -43,8 +43,8 @@ jobs:
                   applicationId "com.exemplo.relogiowidget"
                   minSdk 22          // Android 5.1.1
                   targetSdk 34
-                  versionCode 7
-                  versionName "3.3"
+                  versionCode 8
+                  versionName "4.0"
               }
 
               buildTypes {
@@ -129,6 +129,82 @@ jobs:
 
           </manifest>
           EOF_ARQUIVO
+          mkdir -p "$(dirname 'app/src/main/java/com/exemplo/relogiowidget/ClockOptions.java')"
+          cat > 'app/src/main/java/com/exemplo/relogiowidget/ClockOptions.java' <<'EOF_ARQUIVO'
+          package com.exemplo.relogiowidget;
+
+          import android.graphics.Typeface;
+
+          /** Opções de aparência do relógio: fontes, rotações, cores e opacidade. */
+          final class ClockOptions {
+
+              private ClockOptions() {
+              }
+
+              // Fontes do sistema. A chave entra no nome do layout (widget_clock_<chave>_<rotação>)
+              static final String[] FONT_KEYS = {
+                      "normal", "light", "thin", "medium", "black",
+                      "condensed", "serif", "mono", "casual", "cursive"
+              };
+              static final String[] FONT_FAMILIES = {
+                      "sans-serif", "sans-serif-light", "sans-serif-thin", "sans-serif-medium", "sans-serif-black",
+                      "sans-serif-condensed", "serif", "monospace", "casual", "cursive"
+              };
+              static final int[] FONT_LABELS = {
+                      R.string.fonte_normal, R.string.fonte_leve, R.string.fonte_fina, R.string.fonte_media,
+                      R.string.fonte_preta, R.string.fonte_condensada, R.string.fonte_serifada,
+                      R.string.fonte_mono, R.string.fonte_casual, R.string.fonte_cursiva
+              };
+
+              static final int[] ROTATIONS = {0, 90, 180, 270};
+              static final int DEFAULT_ROTATION = 90;
+
+              // 10 cores prontas (RGB, sem transparência)
+              static final int[] COLORS = {
+                      0xFFFFFF, 0xB0BEC5, 0xFFEB3B, 0xFF9800, 0xF44336,
+                      0xF06292, 0xBA68C8, 0x42A5F5, 0x26C6DA, 0x66BB6A
+              };
+              static final int[] COLOR_NAMES = {
+                      R.string.cor_branco, R.string.cor_cinza, R.string.cor_amarelo, R.string.cor_laranja,
+                      R.string.cor_vermelho, R.string.cor_rosa, R.string.cor_roxo, R.string.cor_azul,
+                      R.string.cor_ciano, R.string.cor_verde
+              };
+              static final int DEFAULT_COLOR = 0xFFFFFF;
+
+              // Opacidade em porcentagem (100 = totalmente visível)
+              static final int MIN_OPACITY = 10;
+              static final int DEFAULT_OPACITY = 100;
+
+              /** Posição da fonte na lista; 0 (normal) se a chave for desconhecida. */
+              static int fontIndex(String key) {
+                  for (int i = 0; i < FONT_KEYS.length; i++) {
+                      if (FONT_KEYS[i].equals(key)) return i;
+                  }
+                  return 0;
+              }
+
+              static Typeface typeface(int fontIndex) {
+                  return Typeface.create(FONT_FAMILIES[fontIndex], Typeface.NORMAL);
+              }
+
+              static int rotationOrDefault(int rotation) {
+                  for (int r : ROTATIONS) {
+                      if (r == rotation) return r;
+                  }
+                  return DEFAULT_ROTATION;
+              }
+
+              static int clampOpacity(int percent) {
+                  return Math.max(MIN_OPACITY, Math.min(100, percent));
+              }
+
+              /** Junta cor RGB e opacidade (%) em um único valor ARGB. */
+              static int argb(int rgb, int opacityPercent) {
+                  int alpha = Math.round(clampOpacity(opacityPercent) * 255f / 100f);
+                  return (alpha << 24) | (rgb & 0xFFFFFF);
+              }
+          }
+          EOF_ARQUIVO
           mkdir -p "$(dirname 'app/src/main/java/com/exemplo/relogiowidget/ClockWidgetProvider.java')"
           cat > 'app/src/main/java/com/exemplo/relogiowidget/ClockWidgetProvider.java' <<'EOF_ARQUIVO'
           package com.exemplo.relogiowidget;
@@ -150,12 +226,13 @@ jobs:
           import android.widget.RemoteViews;
 
           /**
-           * Relógio digital girado 90 graus para a direita.
+           * Relógio digital com rotação, fonte, cor e opacidade configuráveis.
            *
-           * A hora é um TextClock (o sistema atualiza sozinho, sem alarme) girado por
-           * android:rotation no layout. Este código só ajusta o tamanho da letra para caber
-           * no widget, a posição (offset em pixels) e o que acontece ao tocar.
-           * Ele só roda quando o widget é criado, redimensionado ou quando você salva ajustes.
+           * A hora é um TextClock (o sistema atualiza sozinho, sem alarme). A fonte e a rotação
+           * vêm do layout escolhido (widget_clock_<fonte>_<rotação>); este código ajusta o tamanho
+           * da letra para caber no widget, a cor com opacidade, a posição (offset em pixels)
+           * e o que acontece ao tocar. Só roda quando o widget é criado, redimensionado
+           * ou quando você salva os ajustes.
            */
           public class ClockWidgetProvider extends AppWidgetProvider {
 
@@ -165,6 +242,10 @@ jobs:
               static final String KEY_OFFSET_X = "offset_x";
               static final String KEY_OFFSET_Y = "offset_y";
               static final String KEY_ACTION = "tap_action";   // o que o toque no relógio faz
+              static final String KEY_FONT = "font";
+              static final String KEY_ROTATION = "rotation";
+              static final String KEY_COLOR = "color";
+              static final String KEY_OPACITY = "opacity";
               static final String TAP_APP = "app";             // abre o app escolhido
               static final String TAP_NONE = "none";           // não faz nada
               static final String TAP_AWAKE = "awake";         // liga/desliga "tela sempre ligada"
@@ -198,17 +279,32 @@ jobs:
                   return ids.length;
               }
 
-              /** Aplica tamanho da letra, posição e ação do toque em um widget. */
+              /** Aplica fonte, rotação, tamanho, cor, posição e ação do toque em um widget. */
               static void update(Context context, AppWidgetManager manager, int id) {
                   SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
                   int dx = prefs.getInt(KEY_OFFSET_X, 0);
                   int dy = prefs.getInt(KEY_OFFSET_Y, 0);
+                  int fontIndex = ClockOptions.fontIndex(prefs.getString(KEY_FONT, ClockOptions.FONT_KEYS[0]));
+                  int rotation = ClockOptions.rotationOrDefault(
+                          prefs.getInt(KEY_ROTATION, ClockOptions.DEFAULT_ROTATION));
+                  int color = ClockOptions.argb(
+                          prefs.getInt(KEY_COLOR, ClockOptions.DEFAULT_COLOR),
+                          prefs.getInt(KEY_OPACITY, ClockOptions.DEFAULT_OPACITY));
 
-                  RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.widget_clock);
+                  // O layout carrega a fonte e a rotação (o widget não aceita trocar isso por código)
+                  int layoutId = context.getResources().getIdentifier(
+                          "widget_clock_" + ClockOptions.FONT_KEYS[fontIndex] + "_" + rotation,
+                          "layout", context.getPackageName());
+                  if (layoutId == 0) {
+                      layoutId = R.layout.widget_clock_normal_90;
+                  }
+                  RemoteViews views = new RemoteViews(context.getPackageName(), layoutId);
 
                   // Tamanho da letra: o maior que cabe, já descontando o espaço do deslocamento
                   views.setTextViewTextSize(R.id.clock, TypedValue.COMPLEX_UNIT_PX,
-                          fitTextSize(context, manager, id, dx, dy));
+                          fitTextSize(context, manager, id, dx, dy, ClockOptions.typeface(fontIndex), rotation));
+
+                  views.setTextColor(R.id.clock, color);
 
                   // Posição: o relógio fica centralizado na área sem padding. Padding de 2*d de um lado
                   // desloca o centro em d pixels (positivo = direita / baixo).
@@ -248,11 +344,12 @@ jobs:
               }
 
               /**
-               * Maior tamanho de letra (em pixels) em que "00:00", girado, cabe no widget.
-               * Depois de girar, o comprimento do texto vira a altura e a altura dos dígitos vira a largura.
+               * Maior tamanho de letra (em pixels) em que "00:00" cabe no widget, na fonte e rotação
+               * escolhidas. Em 90 e 270 graus o comprimento do texto usa a altura do widget e a altura
+               * dos dígitos usa a largura; em 0 e 180 é o contrário.
                */
               private static float fitTextSize(Context context, AppWidgetManager manager, int id,
-                                               int dx, int dy) {
+                                               int dx, int dy, Typeface typeface, int rotation) {
                   float density = context.getResources().getDisplayMetrics().density;
                   boolean landscape = context.getResources().getConfiguration().orientation
                           == Configuration.ORIENTATION_LANDSCAPE;
@@ -275,20 +372,24 @@ jobs:
                   }
 
                   Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-                  paint.setTypeface(Typeface.DEFAULT);
+                  paint.setTypeface(typeface);
                   final float base = 100f;
                   paint.setTextSize(base);
                   Rect digit = new Rect();
                   paint.getTextBounds("0", 0, 1, digit);
-                  float refLength = paint.measureText("00:00");
+                  float length = paint.measureText("00:00");     // comprimento do texto
+                  float thickness = Math.max(1, digit.height()); // altura dos dígitos
 
                   // Reserva espaço para o deslocamento (nos dois lados, pois o relógio é centralizado),
                   // assim a hora nunca passa da borda do widget
                   float margin = MARGIN_DP * density;
                   float availWidth = Math.max(1f, wDp * density - 2 * margin - 2 * Math.abs(dx));
                   float availHeight = Math.max(1f, hDp * density - 2 * margin - 2 * Math.abs(dy));
-                  float scale = Math.min(availWidth / Math.max(1, digit.height()),
-                          availHeight / Math.max(1f, refLength));
+                  boolean vertical = rotation == 90 || rotation == 270;
+                  float lengthSpace = vertical ? availHeight : availWidth;
+                  float thicknessSpace = vertical ? availWidth : availHeight;
+
+                  float scale = Math.min(thicknessSpace / thickness, lengthSpace / Math.max(1f, length));
                   if (scale <= 0f) {
                       scale = 1f;
                   }
@@ -545,42 +646,78 @@ jobs:
           import android.content.Intent;
           import android.content.SharedPreferences;
           import android.content.pm.PackageManager;
+          import android.graphics.drawable.GradientDrawable;
           import android.os.Bundle;
+          import android.text.Editable;
+          import android.text.TextWatcher;
+          import android.util.TypedValue;
           import android.view.View;
+          import android.view.ViewGroup;
           import android.widget.Button;
           import android.widget.EditText;
+          import android.widget.LinearLayout;
+          import android.widget.RadioButton;
           import android.widget.RadioGroup;
+          import android.widget.SeekBar;
+          import android.widget.TextView;
           import android.widget.Toast;
 
+          import java.util.Locale;
+
           /**
-           * Tela do ícone do app: o que o toque faz (abrir app, nada ou tela sempre ligada),
-           * qual app abrir e a posição do relógio em pixels.
+           * Tela do ícone do app: o que o toque faz, qual app abrir, rotação, fonte, cor,
+           * opacidade e posição do relógio. A faixa escura no topo mostra uma prévia.
            */
           public class SettingsActivity extends Activity {
 
               private static final int REQ_PICK = 1;
               private static final int LIMIT = 5000;   // limite de segurança do deslocamento
 
+              private TextView preview;
               private RadioGroup tapGroup;
+              private RadioGroup rotationGroup;
+              private RadioGroup fontGroup;
               private Button appButton;
+              private Button customButton;
               private EditText offsetX;
               private EditText offsetY;
+              private EditText hexField;
+              private EditText opacityField;
+              private SeekBar opacitySeek;
+
+              private final View[] swatches = new View[ClockOptions.COLORS.length];
+              private final int[] fontButtonIds = new int[ClockOptions.FONT_KEYS.length];
+              private int selectedRgb = ClockOptions.DEFAULT_COLOR;
+              private boolean customSelected = false;
+              private boolean updatingOpacity = false;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   setContentView(R.layout.activity_settings);
 
+                  preview = (TextView) findViewById(R.id.preview);
                   tapGroup = (RadioGroup) findViewById(R.id.tap_group);
+                  rotationGroup = (RadioGroup) findViewById(R.id.rotation_group);
+                  fontGroup = (RadioGroup) findViewById(R.id.font_group);
                   appButton = (Button) findViewById(R.id.btn_app);
+                  customButton = (Button) findViewById(R.id.btn_custom);
                   offsetX = (EditText) findViewById(R.id.offset_x);
                   offsetY = (EditText) findViewById(R.id.offset_y);
+                  hexField = (EditText) findViewById(R.id.hex_field);
+                  opacityField = (EditText) findViewById(R.id.opacity_field);
+                  opacitySeek = (SeekBar) findViewById(R.id.opacity_seek);
 
                   SharedPreferences prefs = prefs();
                   offsetX.setText(String.valueOf(prefs.getInt(ClockWidgetProvider.KEY_OFFSET_X, 0)));
                   offsetY.setText(String.valueOf(prefs.getInt(ClockWidgetProvider.KEY_OFFSET_Y, 0)));
                   showCurrentAction();
                   showCurrentApp();
+                  showCurrentRotation(prefs.getInt(ClockWidgetProvider.KEY_ROTATION, ClockOptions.DEFAULT_ROTATION));
+                  buildFonts(prefs.getString(ClockWidgetProvider.KEY_FONT, ClockOptions.FONT_KEYS[0]));
+                  buildColors(prefs.getInt(ClockWidgetProvider.KEY_COLOR, ClockOptions.DEFAULT_COLOR));
+                  setupOpacity(prefs.getInt(ClockWidgetProvider.KEY_OPACITY, ClockOptions.DEFAULT_OPACITY));
+                  updatePreview();
 
                   appButton.setOnClickListener(new View.OnClickListener() {
                       @Override
@@ -612,6 +749,12 @@ jobs:
                   return getSharedPreferences(ClockWidgetProvider.PREFS, Context.MODE_PRIVATE);
               }
 
+              private int dp(float value) {
+                  return Math.round(value * getResources().getDisplayMetrics().density);
+              }
+
+              // ---------------- Toque e app ----------------
+
               private void showCurrentAction() {
                   String action = prefs().getString(ClockWidgetProvider.KEY_ACTION, ClockWidgetProvider.TAP_APP);
                   if (ClockWidgetProvider.TAP_NONE.equals(action)) {
@@ -637,7 +780,248 @@ jobs:
                   appButton.setText(label != null ? label : getString(R.string.escolher_app));
               }
 
+              // ---------------- Rotação ----------------
+
+              private void showCurrentRotation(int saved) {
+                  int rotation = ClockOptions.rotationOrDefault(saved);
+                  if (rotation == 0) {
+                      rotationGroup.check(R.id.rb_rot_0);
+                  } else if (rotation == 180) {
+                      rotationGroup.check(R.id.rb_rot_180);
+                  } else if (rotation == 270) {
+                      rotationGroup.check(R.id.rb_rot_270);
+                  } else {
+                      rotationGroup.check(R.id.rb_rot_90);
+                  }
+              }
+
+              private int selectedRotation() {
+                  int checked = rotationGroup.getCheckedRadioButtonId();
+                  if (checked == R.id.rb_rot_0) return 0;
+                  if (checked == R.id.rb_rot_180) return 180;
+                  if (checked == R.id.rb_rot_270) return 270;
+                  return 90;
+              }
+
+              // ---------------- Fonte ----------------
+
+              private void buildFonts(String savedKey) {
+                  int selected = ClockOptions.fontIndex(savedKey);
+                  for (int i = 0; i < ClockOptions.FONT_KEYS.length; i++) {
+                      RadioButton button = new RadioButton(this);
+                      button.setId(View.generateViewId());
+                      fontButtonIds[i] = button.getId();
+                      // Cada item aparece escrito na própria fonte, como prévia
+                      button.setText(getString(ClockOptions.FONT_LABELS[i]) + "   12:34");
+                      button.setTypeface(ClockOptions.typeface(i));
+                      button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+                      fontGroup.addView(button, new RadioGroup.LayoutParams(
+                              ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                  }
+                  fontGroup.check(fontButtonIds[selected]);
+                  fontGroup.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener() {
+                      @Override
+                      public void onCheckedChanged(RadioGroup group, int checkedId) {
+                          updatePreview();
+                      }
+                  });
+              }
+
+              private int selectedFontIndex() {
+                  int checked = fontGroup.getCheckedRadioButtonId();
+                  for (int i = 0; i < fontButtonIds.length; i++) {
+                      if (fontButtonIds[i] == checked) return i;
+                  }
+                  return 0;
+              }
+
+              // ---------------- Cor ----------------
+
+              private void buildColors(int savedRgb) {
+                  LinearLayout row1 = (LinearLayout) findViewById(R.id.color_row1);
+                  LinearLayout row2 = (LinearLayout) findViewById(R.id.color_row2);
+                  for (int i = 0; i < ClockOptions.COLORS.length; i++) {
+                      View swatch = new View(this);
+                      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+                      lp.setMargins(dp(4), dp(4), dp(4), dp(4));
+                      swatch.setLayoutParams(lp);
+                      swatch.setContentDescription(getString(ClockOptions.COLOR_NAMES[i]));
+                      final int index = i;
+                      swatch.setOnClickListener(new View.OnClickListener() {
+                          @Override
+                          public void onClick(View v) {
+                              selectedRgb = ClockOptions.COLORS[index];
+                              customSelected = false;
+                              refreshColorSelection();
+                              updatePreview();
+                          }
+                      });
+                      (i < 5 ? row1 : row2).addView(swatch);
+                      swatches[i] = swatch;
+                  }
+
+                  selectedRgb = savedRgb & 0xFFFFFF;
+                  customSelected = presetIndex(selectedRgb) < 0;
+                  if (customSelected) {
+                      hexField.setText(toHex(selectedRgb));
+                  }
+
+                  customButton.setOnClickListener(new View.OnClickListener() {
+                      @Override
+                      public void onClick(View v) {
+                          customSelected = true;
+                          int typed = parseHex(hexField.getText().toString());
+                          if (typed < 0) {
+                              hexField.setText(toHex(selectedRgb));
+                          } else {
+                              selectedRgb = typed;
+                          }
+                          refreshColorSelection();
+                          updatePreview();
+                      }
+                  });
+                  hexField.addTextChangedListener(new TextWatcher() {
+                      @Override
+                      public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                      }
+
+                      @Override
+                      public void onTextChanged(CharSequence s, int start, int before, int count) {
+                      }
+
+                      @Override
+                      public void afterTextChanged(Editable s) {
+                          if (!customSelected) return;
+                          int typed = parseHex(s.toString());
+                          if (typed >= 0) {
+                              selectedRgb = typed;
+                              updatePreview();
+                          }
+                      }
+                  });
+                  refreshColorSelection();
+              }
+
+              /** Destaca o quadradinho escolhido e mostra o campo HEX só em "Personalizar". */
+              private void refreshColorSelection() {
+                  int selectedPreset = customSelected ? -1 : presetIndex(selectedRgb);
+                  for (int i = 0; i < swatches.length; i++) {
+                      GradientDrawable shape = new GradientDrawable();
+                      shape.setColor(0xFF000000 | ClockOptions.COLORS[i]);
+                      shape.setCornerRadius(dp(8));
+                      if (i == selectedPreset) {
+                          shape.setStroke(dp(3), 0xFF000000);
+                      } else {
+                          shape.setStroke(dp(1), 0xFF9E9E9E);
+                      }
+                      swatches[i].setBackground(shape);
+                  }
+                  String label = getString(R.string.personalizar);
+                  customButton.setText(customSelected ? "✓ " + label : label);
+                  hexField.setVisibility(customSelected ? View.VISIBLE : View.GONE);
+              }
+
+              private static int presetIndex(int rgb) {
+                  for (int i = 0; i < ClockOptions.COLORS.length; i++) {
+                      if (ClockOptions.COLORS[i] == (rgb & 0xFFFFFF)) return i;
+                  }
+                  return -1;
+              }
+
+              private static String toHex(int rgb) {
+                  return String.format(Locale.US, "#%06X", rgb & 0xFFFFFF);
+              }
+
+              /** Lê "#RRGGBB" ou "RRGGBB". Devolve -1 se não for um código de 6 dígitos válido. */
+              private static int parseHex(String text) {
+                  String s = text.trim();
+                  if (s.startsWith("#")) {
+                      s = s.substring(1);
+                  }
+                  if (!s.matches("[0-9a-fA-F]{6}")) {
+                      return -1;
+                  }
+                  return Integer.parseInt(s, 16);
+              }
+
+              // ---------------- Opacidade ----------------
+
+              private void setupOpacity(int saved) {
+                  opacitySeek.setMax(100 - ClockOptions.MIN_OPACITY);
+                  setOpacity(ClockOptions.clampOpacity(saved));
+
+                  opacitySeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                      @Override
+                      public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                          if (!fromUser) return;
+                          updatingOpacity = true;
+                          opacityField.setText(String.valueOf(progress + ClockOptions.MIN_OPACITY));
+                          updatingOpacity = false;
+                          updatePreview();
+                      }
+
+                      @Override
+                      public void onStartTrackingTouch(SeekBar seekBar) {
+                      }
+
+                      @Override
+                      public void onStopTrackingTouch(SeekBar seekBar) {
+                      }
+                  });
+                  opacityField.addTextChangedListener(new TextWatcher() {
+                      @Override
+                      public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                      }
+
+                      @Override
+                      public void onTextChanged(CharSequence s, int start, int before, int count) {
+                      }
+
+                      @Override
+                      public void afterTextChanged(Editable s) {
+                          if (updatingOpacity) return;
+                          // Não reescreve o campo enquanto a pessoa digita; só move o controle e a prévia
+                          opacitySeek.setProgress(currentOpacity() - ClockOptions.MIN_OPACITY);
+                          updatePreview();
+                      }
+                  });
+              }
+
+              private void setOpacity(int percent) {
+                  updatingOpacity = true;
+                  opacitySeek.setProgress(percent - ClockOptions.MIN_OPACITY);
+                  opacityField.setText(String.valueOf(percent));
+                  updatingOpacity = false;
+              }
+
+              /** Opacidade atual (10 a 100). Campo vazio ou inválido usa o valor do controle. */
+              private int currentOpacity() {
+                  try {
+                      return ClockOptions.clampOpacity(Integer.parseInt(opacityField.getText().toString().trim()));
+                  } catch (NumberFormatException e) {
+                      return opacitySeek.getProgress() + ClockOptions.MIN_OPACITY;
+                  }
+              }
+
+              // ---------------- Prévia e salvar ----------------
+
+              private void updatePreview() {
+                  preview.setTypeface(ClockOptions.typeface(selectedFontIndex()));
+                  preview.setTextColor(ClockOptions.argb(selectedRgb, currentOpacity()));
+              }
+
               private void save() {
+                  // Valida o HEX antes de salvar qualquer coisa
+                  int rgb = selectedRgb;
+                  if (customSelected) {
+                      int typed = parseHex(hexField.getText().toString());
+                      if (typed < 0) {
+                          Toast.makeText(this, R.string.hex_invalido, Toast.LENGTH_LONG).show();
+                          return;
+                      }
+                      rgb = typed;
+                  }
+
                   String action;
                   int checked = tapGroup.getCheckedRadioButtonId();
                   if (checked == R.id.rb_none) {
@@ -647,11 +1031,16 @@ jobs:
                   } else {
                       action = ClockWidgetProvider.TAP_APP;
                   }
+                  int opacity = currentOpacity();
 
                   prefs().edit()
                           .putString(ClockWidgetProvider.KEY_ACTION, action)
                           .putInt(ClockWidgetProvider.KEY_OFFSET_X, parse(offsetX))
                           .putInt(ClockWidgetProvider.KEY_OFFSET_Y, parse(offsetY))
+                          .putInt(ClockWidgetProvider.KEY_ROTATION, selectedRotation())
+                          .putString(ClockWidgetProvider.KEY_FONT, ClockOptions.FONT_KEYS[selectedFontIndex()])
+                          .putInt(ClockWidgetProvider.KEY_COLOR, rgb)
+                          .putInt(ClockWidgetProvider.KEY_OPACITY, opacity)
                           .apply();
 
                   // Saiu do modo "tela ligada": desliga a trava para não ficar presa sem como desligar
@@ -659,6 +1048,7 @@ jobs:
                       stopService(new Intent(this, KeepAwakeService.class));
                   }
 
+                  setOpacity(opacity);   // mostra o valor já ajustado aos limites
                   ClockWidgetProvider.updateAll(this);
                   Toast.makeText(this, R.string.salvo, Toast.LENGTH_SHORT).show();
               }
@@ -684,18 +1074,37 @@ jobs:
               android:viewportHeight="48"
               android:viewportWidth="48">
 
-              <!-- Círculo escuro -->
+              <!-- Fundo escuro de cantos arredondados -->
               <path
                   android:fillColor="#263238"
-                  android:pathData="M24,24m-22,0a22,22 0 1,1 44,0a22,22 0 1,1 -44,0" />
+                  android:pathData="M8,0 L40,0 A8,8 0 0 1 48,8 L48,40 A8,8 0 0 1 40,48 L8,48 A8,8 0 0 1 0,40 L0,8 A8,8 0 0 1 8,0 Z" />
 
-              <!-- Ponteiros -->
+              <!-- Seta circular (sentido horário) em volta do relógio -->
               <path
-                  android:pathData="M24,11 L24,24 L33,29"
+                  android:pathData="M33.75,7.11 A19.5,19.5 0 1 1 7.11,14.25"
+                  android:strokeColor="#4FC3F7"
+                  android:strokeLineCap="round"
+                  android:strokeWidth="3" />
+              <path
+                  android:fillColor="#4FC3F7"
+                  android:pathData="M3.2,12 L9.6,9.9 L11,16.5 Z" />
+
+              <!-- Visor do relógio digital -->
+              <path
+                  android:pathData="M14.5,18.5 L33.5,18.5 L33.5,29.5 L14.5,29.5 Z"
+                  android:strokeColor="#FFFFFF"
+                  android:strokeLineJoin="round"
+                  android:strokeWidth="2.5" />
+
+              <!-- Dígitos: 1 : 1 -->
+              <path
+                  android:pathData="M19.5,21.5 L19.5,26.5 M28.5,21.5 L28.5,26.5"
                   android:strokeColor="#FFFFFF"
                   android:strokeLineCap="round"
-                  android:strokeLineJoin="round"
-                  android:strokeWidth="3" />
+                  android:strokeWidth="2" />
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M22.8,22.3 L25.2,22.3 L25.2,24.7 L22.8,24.7 Z M22.8,25.3 L25.2,25.3 L25.2,27.7 L22.8,27.7 Z" />
           </vector>
           EOF_ARQUIVO
           mkdir -p "$(dirname 'app/src/main/res/drawable/ic_stat_awake.xml')"
@@ -707,146 +1116,310 @@ jobs:
               android:viewportHeight="24"
               android:viewportWidth="24">
 
-              <!-- Ícone da barra de status: tela (monitor) -->
-              <path
-                  android:pathData="M4,5 H20 V16 H4 Z"
-                  android:strokeColor="#FFFFFF"
-                  android:strokeLineJoin="round"
-                  android:strokeWidth="2" />
-              <path
-                  android:fillColor="#FFFFFF"
-                  android:pathData="M8,19 H16 V21 H8 Z" />
+              <!-- Ícone da barra de status: cadeado fechado "deitado" (girado 90° para a direita,
+                   como o relógio). Desenhado em pé e girado pelo group. -->
+              <group
+                  android:pivotX="12"
+                  android:pivotY="12"
+                  android:rotation="90">
+
+                  <!-- Arco (haste) -->
+                  <path
+                      android:pathData="M9,10 L9,6.5 A3,3 0 0 1 15,6.5 L15,10"
+                      android:strokeColor="#FFFFFF"
+                      android:strokeLineCap="butt"
+                      android:strokeWidth="2" />
+
+                  <!-- Corpo com furo de fechadura (o furo é desenhado no sentido contrário) -->
+                  <path
+                      android:fillColor="#FFFFFF"
+                      android:pathData="M5.5,10 H18.5 A1.5,1.5 0 0 1 20,11.5 V19.5 A1.5,1.5 0 0 1 18.5,21 H5.5 A1.5,1.5 0 0 1 4,19.5 V11.5 A1.5,1.5 0 0 1 5.5,10 Z M10.8,19.5 L13.2,19.5 L12.8,16.5 A1.9,1.9 0 1 0 11.2,16.5 Z" />
+              </group>
           </vector>
           EOF_ARQUIVO
           mkdir -p "$(dirname 'app/src/main/res/layout/activity_settings.xml')"
           cat > 'app/src/main/res/layout/activity_settings.xml' <<'EOF_ARQUIVO'
           <?xml version="1.0" encoding="utf-8"?>
-          <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent"
-              android:layout_height="match_parent">
+              android:layout_height="match_parent"
+              android:orientation="vertical">
 
-              <LinearLayout
+              <!-- Prévia fixa no topo: mostra fonte, cor e opacidade escolhidas -->
+              <TextView
+                  android:id="@+id/preview"
                   android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:orientation="vertical"
-                  android:padding="16dp">
+                  android:layout_height="72dp"
+                  android:background="#263238"
+                  android:gravity="center"
+                  android:text="12:34"
+                  android:textColor="#FFFFFF"
+                  android:textSize="40sp" />
 
-                  <TextView
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:text="@string/rotulo_toque"
-                      android:textSize="16sp"
-                      android:textStyle="bold" />
-
-                  <RadioGroup
-                      android:id="@+id/tap_group"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content">
-
-                      <RadioButton
-                          android:id="@+id/rb_app"
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:text="@string/toque_app" />
-
-                      <RadioButton
-                          android:id="@+id/rb_none"
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:text="@string/toque_nada" />
-
-                      <RadioButton
-                          android:id="@+id/rb_awake"
-                          android:layout_width="match_parent"
-                          android:layout_height="wrap_content"
-                          android:text="@string/toque_tela" />
-                  </RadioGroup>
-
-                  <TextView
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:layout_marginBottom="12dp"
-                      android:text="@string/explicacao_tela"
-                      android:textSize="13sp" />
-
-                  <TextView
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:text="@string/rotulo_app" />
-
-                  <Button
-                      android:id="@+id/btn_app"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:layout_marginBottom="24dp" />
-
-                  <TextView
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:text="@string/rotulo_posicao"
-                      android:textSize="16sp"
-                      android:textStyle="bold" />
-
-                  <TextView
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:layout_marginBottom="8dp"
-                      android:text="@string/explicacao_posicao"
-                      android:textSize="13sp" />
+              <ScrollView
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1">
 
                   <LinearLayout
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
-                      android:gravity="center_vertical"
-                      android:orientation="horizontal">
+                      android:orientation="vertical"
+                      android:padding="16dp">
+
+                      <!-- Toque -->
+                      <TextView
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:text="@string/rotulo_toque"
+                          android:textSize="16sp"
+                          android:textStyle="bold" />
+
+                      <RadioGroup
+                          android:id="@+id/tap_group"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content">
+
+                          <RadioButton
+                              android:id="@+id/rb_app"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="@string/toque_app" />
+
+                          <RadioButton
+                              android:id="@+id/rb_none"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="@string/toque_nada" />
+
+                          <RadioButton
+                              android:id="@+id/rb_awake"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="@string/toque_tela" />
+                      </RadioGroup>
 
                       <TextView
-                          android:layout_width="0dp"
+                          android:layout_width="match_parent"
                           android:layout_height="wrap_content"
-                          android:layout_weight="1"
-                          android:text="@string/horizontal" />
-
-                      <EditText
-                          android:id="@+id/offset_x"
-                          android:layout_width="0dp"
-                          android:layout_height="wrap_content"
-                          android:layout_weight="1"
-                          android:gravity="end"
-                          android:inputType="numberSigned"
-                          android:maxLength="6" />
-                  </LinearLayout>
-
-                  <LinearLayout
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:gravity="center_vertical"
-                      android:orientation="horizontal">
+                          android:layout_marginBottom="12dp"
+                          android:text="@string/explicacao_tela"
+                          android:textSize="13sp" />
 
                       <TextView
-                          android:layout_width="0dp"
+                          android:layout_width="match_parent"
                           android:layout_height="wrap_content"
-                          android:layout_weight="1"
-                          android:text="@string/vertical" />
+                          android:text="@string/rotulo_app" />
 
-                      <EditText
-                          android:id="@+id/offset_y"
-                          android:layout_width="0dp"
+                      <Button
+                          android:id="@+id/btn_app"
+                          android:layout_width="match_parent"
                           android:layout_height="wrap_content"
-                          android:layout_weight="1"
-                          android:gravity="end"
-                          android:inputType="numberSigned"
-                          android:maxLength="6" />
+                          android:layout_marginBottom="24dp" />
+
+                      <!-- Rotação -->
+                      <TextView
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:text="@string/rotulo_rotacao"
+                          android:textSize="16sp"
+                          android:textStyle="bold" />
+
+                      <RadioGroup
+                          android:id="@+id/rotation_group"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:layout_marginBottom="24dp">
+
+                          <RadioButton
+                              android:id="@+id/rb_rot_0"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="@string/rot_0" />
+
+                          <RadioButton
+                              android:id="@+id/rb_rot_90"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="@string/rot_90" />
+
+                          <RadioButton
+                              android:id="@+id/rb_rot_180"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="@string/rot_180" />
+
+                          <RadioButton
+                              android:id="@+id/rb_rot_270"
+                              android:layout_width="match_parent"
+                              android:layout_height="wrap_content"
+                              android:text="@string/rot_270" />
+                      </RadioGroup>
+
+                      <!-- Fonte (os itens são criados pelo código, cada um na sua fonte) -->
+                      <TextView
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:text="@string/rotulo_fonte"
+                          android:textSize="16sp"
+                          android:textStyle="bold" />
+
+                      <RadioGroup
+                          android:id="@+id/font_group"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:layout_marginBottom="24dp" />
+
+                      <!-- Cor (os quadradinhos são criados pelo código) -->
+                      <TextView
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:text="@string/rotulo_cor"
+                          android:textSize="16sp"
+                          android:textStyle="bold" />
+
+                      <LinearLayout
+                          android:id="@+id/color_row1"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal" />
+
+                      <LinearLayout
+                          android:id="@+id/color_row2"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:orientation="horizontal" />
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:layout_marginBottom="24dp"
+                          android:gravity="center_vertical"
+                          android:orientation="horizontal">
+
+                          <Button
+                              android:id="@+id/btn_custom"
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content" />
+
+                          <EditText
+                              android:id="@+id/hex_field"
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:hint="@string/dica_hex"
+                              android:inputType="textCapCharacters|textNoSuggestions"
+                              android:maxLength="7"
+                              android:singleLine="true"
+                              android:visibility="gone" />
+                      </LinearLayout>
+
+                      <!-- Opacidade -->
+                      <TextView
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:text="@string/rotulo_opacidade"
+                          android:textSize="16sp"
+                          android:textStyle="bold" />
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:layout_marginBottom="24dp"
+                          android:gravity="center_vertical"
+                          android:orientation="horizontal">
+
+                          <SeekBar
+                              android:id="@+id/opacity_seek"
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1" />
+
+                          <EditText
+                              android:id="@+id/opacity_field"
+                              android:layout_width="64dp"
+                              android:layout_height="wrap_content"
+                              android:gravity="end"
+                              android:inputType="number"
+                              android:maxLength="3"
+                              android:singleLine="true" />
+
+                          <TextView
+                              android:layout_width="wrap_content"
+                              android:layout_height="wrap_content"
+                              android:text="%"
+                              android:textSize="16sp" />
+                      </LinearLayout>
+
+                      <!-- Posição -->
+                      <TextView
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:text="@string/rotulo_posicao"
+                          android:textSize="16sp"
+                          android:textStyle="bold" />
+
+                      <TextView
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:layout_marginBottom="8dp"
+                          android:text="@string/explicacao_posicao"
+                          android:textSize="13sp" />
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:gravity="center_vertical"
+                          android:orientation="horizontal">
+
+                          <TextView
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:text="@string/horizontal" />
+
+                          <EditText
+                              android:id="@+id/offset_x"
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:gravity="end"
+                              android:inputType="numberSigned"
+                              android:maxLength="6" />
+                      </LinearLayout>
+
+                      <LinearLayout
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:gravity="center_vertical"
+                          android:orientation="horizontal">
+
+                          <TextView
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:text="@string/vertical" />
+
+                          <EditText
+                              android:id="@+id/offset_y"
+                              android:layout_width="0dp"
+                              android:layout_height="wrap_content"
+                              android:layout_weight="1"
+                              android:gravity="end"
+                              android:inputType="numberSigned"
+                              android:maxLength="6" />
+                      </LinearLayout>
+
+                      <Button
+                          android:id="@+id/btn_save"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:layout_marginTop="16dp"
+                          android:text="@string/salvar" />
+
                   </LinearLayout>
-
-                  <Button
-                      android:id="@+id/btn_save"
-                      android:layout_width="match_parent"
-                      android:layout_height="wrap_content"
-                      android:layout_marginTop="16dp"
-                      android:text="@string/salvar" />
-
-              </LinearLayout>
-          </ScrollView>
+              </ScrollView>
+          </LinearLayout>
           EOF_ARQUIVO
           mkdir -p "$(dirname 'app/src/main/res/layout/item_app.xml')"
           cat > 'app/src/main/res/layout/item_app.xml' <<'EOF_ARQUIVO'
@@ -875,37 +1448,6 @@ jobs:
 
           </LinearLayout>
           EOF_ARQUIVO
-          mkdir -p "$(dirname 'app/src/main/res/layout/widget_clock.xml')"
-          cat > 'app/src/main/res/layout/widget_clock.xml' <<'EOF_ARQUIVO'
-          <?xml version="1.0" encoding="utf-8"?>
-          <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              android:id="@+id/root"
-              android:layout_width="match_parent"
-              android:layout_height="match_parent">
-
-              <!--
-                  O relógio é um TextClock comum, atualizado pelo próprio sistema (sem alarme).
-                  android:rotation="90" gira 90 graus para a direita em volta do centro.
-                  A largura é fixa e grande de propósito: antes de girar, o texto fica "deitado"
-                  e precisa de espaço para ser medido; depois de girar ele cabe na altura do widget.
-                  O tamanho da letra e a posição são ajustados pelo código (ClockWidgetProvider).
-              -->
-              <TextClock
-                  android:id="@+id/clock"
-                  android:layout_width="1000dp"
-                  android:layout_height="wrap_content"
-                  android:layout_gravity="center"
-                  android:format12Hour="hh:mm"
-                  android:format24Hour="HH:mm"
-                  android:gravity="center"
-                  android:includeFontPadding="false"
-                  android:rotation="90"
-                  android:singleLine="true"
-                  android:textColor="#FFFFFF"
-                  android:textSize="48sp" />
-
-          </FrameLayout>
-          EOF_ARQUIVO
           mkdir -p "$(dirname 'app/src/main/res/values/strings.xml')"
           cat > 'app/src/main/res/values/strings.xml' <<'EOF_ARQUIVO'
           <?xml version="1.0" encoding="utf-8"?>
@@ -914,16 +1456,54 @@ jobs:
               <string name="widget_name">Relógio digital</string>
               <string name="escolha_app">Abrir ao tocar:</string>
               <string name="escolher_app">Escolher app…</string>
+
               <string name="rotulo_toque">Ao tocar no relógio:</string>
               <string name="toque_app">Abrir um app</string>
               <string name="toque_nada">Não fazer nada</string>
               <string name="toque_tela">Manter a tela ligada (liga e desliga a cada toque)</string>
-              <string name="explicacao_tela">Com a tela ligada, aparece um ícone na barra de status e a tela não apaga sozinha. Toque no relógio de novo, ou na notificação, para desligar.</string>
+              <string name="explicacao_tela">Com a tela ligada, aparece um ícone de cadeado na barra de status e a tela não apaga sozinha. Toque no relógio de novo, ou na notificação, para desligar.</string>
               <string name="rotulo_app">App que será aberto:</string>
+
               <string name="rotulo_posicao">Posição do relógio (em pixels)</string>
               <string name="explicacao_posicao">Positivo move para a direita (horizontal) ou para baixo (vertical). Negativo move para a esquerda ou para cima. Use 0 para centralizar.</string>
               <string name="horizontal">Horizontal (X)</string>
               <string name="vertical">Vertical (Y)</string>
+
+              <string name="rotulo_rotacao">Rotação do relógio</string>
+              <string name="rot_0">0° (horizontal)</string>
+              <string name="rot_90">90° para a direita (padrão)</string>
+              <string name="rot_180">180° (de cabeça para baixo)</string>
+              <string name="rot_270">270° (lido de baixo para cima)</string>
+
+              <string name="rotulo_fonte">Fonte</string>
+              <string name="fonte_normal">Normal</string>
+              <string name="fonte_leve">Leve</string>
+              <string name="fonte_fina">Fina</string>
+              <string name="fonte_media">Média</string>
+              <string name="fonte_preta">Preta</string>
+              <string name="fonte_condensada">Condensada</string>
+              <string name="fonte_serifada">Serifada</string>
+              <string name="fonte_mono">Monoespaçada</string>
+              <string name="fonte_casual">Casual</string>
+              <string name="fonte_cursiva">Cursiva</string>
+
+              <string name="rotulo_cor">Cor da letra</string>
+              <string name="cor_branco">Branco</string>
+              <string name="cor_cinza">Cinza claro</string>
+              <string name="cor_amarelo">Amarelo</string>
+              <string name="cor_laranja">Laranja</string>
+              <string name="cor_vermelho">Vermelho</string>
+              <string name="cor_rosa">Rosa</string>
+              <string name="cor_roxo">Roxo</string>
+              <string name="cor_azul">Azul</string>
+              <string name="cor_ciano">Ciano</string>
+              <string name="cor_verde">Verde</string>
+              <string name="personalizar">Personalizar</string>
+              <string name="dica_hex">#RRGGBB</string>
+              <string name="hex_invalido">Código HEX inválido. Use 6 dígitos, como #FF9800.</string>
+
+              <string name="rotulo_opacidade">Opacidade da letra (10% a 100%)</string>
+
               <string name="salvar">Salvar</string>
               <string name="salvo">Salvo!</string>
               <string name="tela_ligada">Tela ligada</string>
@@ -935,7 +1515,7 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
               android:configure="com.exemplo.relogiowidget.ConfigActivity"
-              android:initialLayout="@layout/widget_clock"
+              android:initialLayout="@layout/widget_clock_normal_90"
               android:minHeight="180dp"
               android:minResizeHeight="110dp"
               android:minResizeWidth="40dp"
@@ -974,6 +1554,43 @@ jobs:
           rootProject.name = "RelogioWidget"
           include ':app'
           EOF_ARQUIVO
+
+      - name: Gerar os 40 layouts (10 fontes x 4 rotações)
+        run: |
+          mkdir -p app/src/main/res/layout
+          for par in "normal:sans-serif" "light:sans-serif-light" "thin:sans-serif-thin" \
+                     "medium:sans-serif-medium" "black:sans-serif-black" \
+                     "condensed:sans-serif-condensed" "serif:serif" "mono:monospace" \
+                     "casual:casual" "cursive:cursive"; do
+            key="${par%%:*}"
+            fam="${par#*:}"
+            for rot in 0 90 180 270; do
+              cat > "app/src/main/res/layout/widget_clock_${key}_${rot}.xml" <<EOF_LAYOUT
+          <?xml version="1.0" encoding="utf-8"?>
+          <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:id="@+id/root"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent">
+
+              <TextClock
+                  android:id="@+id/clock"
+                  android:layout_width="1000dp"
+                  android:layout_height="wrap_content"
+                  android:layout_gravity="center"
+                  android:fontFamily="${fam}"
+                  android:format12Hour="hh:mm"
+                  android:format24Hour="HH:mm"
+                  android:gravity="center"
+                  android:includeFontPadding="false"
+                  android:rotation="${rot}"
+                  android:singleLine="true"
+                  android:textColor="#FFFFFF"
+                  android:textSize="48sp" />
+
+          </FrameLayout>
+          EOF_LAYOUT
+            done
+          done
 
       - name: Criar chave de assinatura
         run: |
