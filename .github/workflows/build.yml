@@ -43,8 +43,8 @@ jobs:
                   applicationId "com.exemplo.relogiowidget"
                   minSdk 22          // Android 5.1.1
                   targetSdk 34
-                  versionCode 4
-                  versionName "3.0"
+                  versionCode 5
+                  versionName "3.1"
               }
 
               buildTypes {
@@ -292,8 +292,12 @@ jobs:
                   paint.getTextBounds("0", 0, 1, digit);
                   float refLength = paint.measureText("00:00");     // vira a altura depois de girar
                   float margin = MARGIN_DP * density;
-                  float scale = Math.min((width - 2 * margin) / Math.max(1, digit.height()),
-                          (height - 2 * margin) / Math.max(1f, refLength));
+                  // Reserva espaço para o deslocamento (nos dois lados, pois o relógio é centralizado),
+                  // assim a hora nunca passa da borda do widget
+                  float availWidth = Math.max(1f, width - 2 * margin - 2 * Math.abs(dx));
+                  float availHeight = Math.max(1f, height - 2 * margin - 2 * Math.abs(dy));
+                  float scale = Math.min(availWidth / Math.max(1, digit.height()),
+                          availHeight / Math.max(1f, refLength));
                   if (scale <= 0f) {
                       scale = 1f;
                   }
