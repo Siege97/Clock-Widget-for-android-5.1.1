@@ -1,0 +1,287 @@
+name: Gerar APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.2
+
+      - name: Criar os arquivos do projeto
+        run: |
+          mkdir -p "$(dirname 'app/build.gradle')"
+          cat > 'app/build.gradle' <<'EOF_ARQUIVO'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.exemplo.relogiowidget'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.exemplo.relogiowidget"
+                  minSdk 22          // Android 5.1.1
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+          }
+          EOF_ARQUIVO
+          mkdir -p "$(dirname 'app/src/main/AndroidManifest.xml')"
+          cat > 'app/src/main/AndroidManifest.xml' <<'EOF_ARQUIVO'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <application
+                  android:allowBackup="true"
+                  android:label="@string/app_name">
+
+                  <receiver
+                      android:name=".ClockWidgetProvider"
+                      android:exported="true"
+                      android:label="@string/widget_name">
+                      <intent-filter>
+                          <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.appwidget.provider"
+                          android:resource="@xml/clock_widget_info" />
+                  </receiver>
+
+              </application>
+
+          </manifest>
+          EOF_ARQUIVO
+          mkdir -p "$(dirname 'app/src/main/java/com/exemplo/relogiowidget/ClockWidgetProvider.java')"
+          cat > 'app/src/main/java/com/exemplo/relogiowidget/ClockWidgetProvider.java' <<'EOF_ARQUIVO'
+          package com.exemplo.relogiowidget;
+
+          import android.app.PendingIntent;
+          import android.appwidget.AppWidgetManager;
+          import android.appwidget.AppWidgetProvider;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.os.Build;
+          import android.widget.RemoteViews;
+
+          /**
+           * Relógio digital que alterna entre horizontal e vertical ao toque.
+           * A hora em si é desenhada por TextClock, que se atualiza sozinho
+           * (sem alarmes, sem serviço, quase sem gasto de bateria).
+           */
+          public class ClockWidgetProvider extends AppWidgetProvider {
+
+              private static final String ACTION_TOGGLE = "com.exemplo.relogiowidget.TOGGLE";
+              private static final String PREFS = "clock_prefs";
+              private static final String KEY_VERTICAL = "vertical_";
+
+              @Override
+              public void onUpdate(Context context, AppWidgetManager manager, int[] appWidgetIds) {
+                  for (int id : appWidgetIds) {
+                      render(context, manager, id);
+                  }
+              }
+
+              @Override
+              public void onReceive(Context context, Intent intent) {
+                  super.onReceive(context, intent);
+                  if (ACTION_TOGGLE.equals(intent.getAction())) {
+                      int id = intent.getIntExtra(
+                              AppWidgetManager.EXTRA_APPWIDGET_ID,
+                              AppWidgetManager.INVALID_APPWIDGET_ID);
+                      if (id == AppWidgetManager.INVALID_APPWIDGET_ID) return;
+
+                      SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                      boolean vertical = prefs.getBoolean(KEY_VERTICAL + id, false);
+                      prefs.edit().putBoolean(KEY_VERTICAL + id, !vertical).apply();
+
+                      render(context, AppWidgetManager.getInstance(context), id);
+                  }
+              }
+
+              @Override
+              public void onDeleted(Context context, int[] appWidgetIds) {
+                  SharedPreferences.Editor editor =
+                          context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
+                  for (int id : appWidgetIds) {
+                      editor.remove(KEY_VERTICAL + id);
+                  }
+                  editor.apply();
+              }
+
+              private static void render(Context context, AppWidgetManager manager, int id) {
+                  boolean vertical = context
+                          .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                          .getBoolean(KEY_VERTICAL + id, false);
+
+                  RemoteViews views = new RemoteViews(
+                          context.getPackageName(),
+                          vertical ? R.layout.widget_vertical : R.layout.widget_horizontal);
+
+                  Intent intent = new Intent(context, ClockWidgetProvider.class);
+                  intent.setAction(ACTION_TOGGLE);
+                  intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
+
+                  int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+                  if (Build.VERSION.SDK_INT >= 23) {
+                      flags |= PendingIntent.FLAG_IMMUTABLE;
+                  }
+                  // requestCode = id garante um PendingIntent distinto para cada widget
+                  PendingIntent pending = PendingIntent.getBroadcast(context, id, intent, flags);
+                  views.setOnClickPendingIntent(R.id.root, pending);
+
+                  manager.updateAppWidget(id, views);
+              }
+          }
+          EOF_ARQUIVO
+          mkdir -p "$(dirname 'app/src/main/res/drawable/widget_bg.xml')"
+          cat > 'app/src/main/res/drawable/widget_bg.xml' <<'EOF_ARQUIVO'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android"
+              android:shape="rectangle">
+              <solid android:color="#66000000" />
+              <corners android:radius="16dp" />
+          </shape>
+          EOF_ARQUIVO
+          mkdir -p "$(dirname 'app/src/main/res/layout/widget_horizontal.xml')"
+          cat > 'app/src/main/res/layout/widget_horizontal.xml' <<'EOF_ARQUIVO'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:id="@+id/root"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:background="@drawable/widget_bg"
+              android:gravity="center"
+              android:orientation="horizontal"
+              android:padding="8dp">
+
+              <TextClock
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:format12Hour="hh:mm"
+                  android:format24Hour="HH:mm"
+                  android:includeFontPadding="false"
+                  android:singleLine="true"
+                  android:textColor="#FFFFFF"
+                  android:textSize="48sp" />
+
+          </LinearLayout>
+          EOF_ARQUIVO
+          mkdir -p "$(dirname 'app/src/main/res/layout/widget_vertical.xml')"
+          cat > 'app/src/main/res/layout/widget_vertical.xml' <<'EOF_ARQUIVO'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:id="@+id/root"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:background="@drawable/widget_bg"
+              android:gravity="center"
+              android:orientation="vertical"
+              android:padding="8dp">
+
+              <!-- Horas em cima -->
+              <TextClock
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:format12Hour="hh"
+                  android:format24Hour="HH"
+                  android:includeFontPadding="false"
+                  android:singleLine="true"
+                  android:textColor="#FFFFFF"
+                  android:textSize="48sp" />
+
+              <!-- Minutos embaixo -->
+              <TextClock
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:format12Hour="mm"
+                  android:format24Hour="mm"
+                  android:includeFontPadding="false"
+                  android:singleLine="true"
+                  android:textColor="#FFFFFF"
+                  android:textSize="48sp" />
+
+          </LinearLayout>
+          EOF_ARQUIVO
+          mkdir -p "$(dirname 'app/src/main/res/values/strings.xml')"
+          cat > 'app/src/main/res/values/strings.xml' <<'EOF_ARQUIVO'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">Relógio Widget</string>
+              <string name="widget_name">Relógio digital</string>
+          </resources>
+          EOF_ARQUIVO
+          mkdir -p "$(dirname 'app/src/main/res/xml/clock_widget_info.xml')"
+          cat > 'app/src/main/res/xml/clock_widget_info.xml' <<'EOF_ARQUIVO'
+          <?xml version="1.0" encoding="utf-8"?>
+          <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+              android:initialLayout="@layout/widget_horizontal"
+              android:minWidth="180dp"
+              android:minHeight="70dp"
+              android:minResizeWidth="70dp"
+              android:minResizeHeight="70dp"
+              android:resizeMode="horizontal|vertical"
+              android:updatePeriodMillis="0"
+              android:widgetCategory="home_screen" />
+          EOF_ARQUIVO
+          mkdir -p "$(dirname 'build.gradle')"
+          cat > 'build.gradle' <<'EOF_ARQUIVO'
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
+          }
+          EOF_ARQUIVO
+          mkdir -p "$(dirname 'gradle.properties')"
+          cat > 'gradle.properties' <<'EOF_ARQUIVO'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.nonTransitiveRClass=true
+          EOF_ARQUIVO
+          mkdir -p "$(dirname 'settings.gradle')"
+          cat > 'settings.gradle' <<'EOF_ARQUIVO'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "RelogioWidget"
+          include ':app'
+          EOF_ARQUIVO
+
+      - name: Compilar
+        run: gradle assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RelogioWidget-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
