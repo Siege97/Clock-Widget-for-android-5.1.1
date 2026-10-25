@@ -29,12 +29,22 @@ jobs:
               namespace 'com.exemplo.relogiowidget'
               compileSdk 34
 
+              // Chave de assinatura fixa: assim cada APK novo instala por cima do anterior
+              signingConfigs {
+                  debug {
+                      storeFile file('debug.keystore')
+                      storePassword 'android'
+                      keyAlias 'chave'
+                      keyPassword 'android'
+                  }
+              }
+
               defaultConfig {
                   applicationId "com.exemplo.relogiowidget"
                   minSdk 22          // Android 5.1.1
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 2
+                  versionName "2.0"
               }
 
               buildTypes {
@@ -54,9 +64,27 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+              <!-- Permite listar os apps instalados na tela de escolha (Android 11+) -->
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
+              </queries>
+
               <application
                   android:allowBackup="true"
                   android:label="@string/app_name">
+
+                  <!-- Tela que aparece ao adicionar o widget: escolher qual app abrir ao tocar -->
+                  <activity
+                      android:name=".ConfigActivity"
+                      android:exported="true"
+                      android:theme="@android:style/Theme.DeviceDefault.Light.Dialog">
+                      <intent-filter>
+                          <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+                      </intent-filter>
+                  </activity>
 
                   <receiver
                       android:name=".ClockWidgetProvider"
@@ -64,6 +92,8 @@ jobs:
                       android:label="@string/widget_name">
                       <intent-filter>
                           <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                          <action android:name="android.intent.action.TIME_SET" />
+                          <action android:name="android.intent.action.TIMEZONE_CHANGED" />
                       </intent-filter>
                       <meta-data
                           android:name="android.appwidget.provider"
@@ -78,153 +108,350 @@ jobs:
           cat > 'app/src/main/java/com/exemplo/relogiowidget/ClockWidgetProvider.java' <<'EOF_ARQUIVO'
           package com.exemplo.relogiowidget;
 
+          import android.app.AlarmManager;
           import android.app.PendingIntent;
           import android.appwidget.AppWidgetManager;
           import android.appwidget.AppWidgetProvider;
+          import android.content.ComponentName;
           import android.content.Context;
           import android.content.Intent;
-          import android.content.SharedPreferences;
+          import android.graphics.Bitmap;
+          import android.graphics.Canvas;
+          import android.graphics.Color;
+          import android.graphics.Paint;
+          import android.graphics.Rect;
+          import android.graphics.Typeface;
           import android.os.Build;
+          import android.text.format.DateFormat;
           import android.widget.RemoteViews;
 
+          import java.text.SimpleDateFormat;
+          import java.util.Date;
+          import java.util.Locale;
+
           /**
-           * Relógio digital que alterna entre horizontal e vertical ao toque.
-           * A hora em si é desenhada por TextClock, que se atualiza sozinho
-           * (sem alarmes, sem serviço, quase sem gasto de bateria).
+           * Relógio digital girado 90 graus para a direita.
+           *
+           * Widgets não podem girar views no Android 5.1, então a hora é desenhada
+           * já girada dentro de um Bitmap, que é trocado a cada minuto por um alarme.
            */
           public class ClockWidgetProvider extends AppWidgetProvider {
 
-              private static final String ACTION_TOGGLE = "com.exemplo.relogiowidget.TOGGLE";
-              private static final String PREFS = "clock_prefs";
-              private static final String KEY_VERTICAL = "vertical_";
+              static final String PREFS = "clock_prefs";
+              static final String KEY_APP = "app_";
+              private static final String ACTION_TICK = "com.exemplo.relogiowidget.TICK";
+
+              // ---- Ajustes visuais (mude aqui) ----
+              private static final int TEXT_COLOR = Color.WHITE;
+              private static final float TEXT_SIZE_PX = 280f;   // só define a nitidez; o widget se ajusta ao tamanho que você der
+              private static final int PADDING_PX = 12;
 
               @Override
               public void onUpdate(Context context, AppWidgetManager manager, int[] appWidgetIds) {
                   for (int id : appWidgetIds) {
-                      render(context, manager, id);
+                      update(context, manager, id);
                   }
+                  scheduleNextTick(context);
               }
 
               @Override
               public void onReceive(Context context, Intent intent) {
                   super.onReceive(context, intent);
-                  if (ACTION_TOGGLE.equals(intent.getAction())) {
-                      int id = intent.getIntExtra(
-                              AppWidgetManager.EXTRA_APPWIDGET_ID,
-                              AppWidgetManager.INVALID_APPWIDGET_ID);
-                      if (id == AppWidgetManager.INVALID_APPWIDGET_ID) return;
+                  String action = intent.getAction();
+                  if (ACTION_TICK.equals(action)
+                          || Intent.ACTION_TIME_CHANGED.equals(action)
+                          || Intent.ACTION_TIMEZONE_CHANGED.equals(action)) {
+                      AppWidgetManager manager = AppWidgetManager.getInstance(context);
+                      int[] ids = manager.getAppWidgetIds(new ComponentName(context, ClockWidgetProvider.class));
+                      for (int id : ids) {
+                          update(context, manager, id);
+                      }
+                      if (ids.length > 0) {
+                          scheduleNextTick(context);
+                      }
+                  }
+              }
 
-                      SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-                      boolean vertical = prefs.getBoolean(KEY_VERTICAL + id, false);
-                      prefs.edit().putBoolean(KEY_VERTICAL + id, !vertical).apply();
+              @Override
+              public void onEnabled(Context context) {
+                  scheduleNextTick(context);
+              }
 
-                      render(context, AppWidgetManager.getInstance(context), id);
+              @Override
+              public void onDisabled(Context context) {
+                  AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+                  if (am != null) {
+                      am.cancel(tickIntent(context));
                   }
               }
 
               @Override
               public void onDeleted(Context context, int[] appWidgetIds) {
-                  SharedPreferences.Editor editor =
+                  android.content.SharedPreferences.Editor editor =
                           context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
                   for (int id : appWidgetIds) {
-                      editor.remove(KEY_VERTICAL + id);
+                      editor.remove(KEY_APP + id);
                   }
                   editor.apply();
               }
 
-              private static void render(Context context, AppWidgetManager manager, int id) {
-                  boolean vertical = context
-                          .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                          .getBoolean(KEY_VERTICAL + id, false);
+              /** Redesenha um widget: hora girada + toque que abre o app escolhido. */
+              static void update(Context context, AppWidgetManager manager, int id) {
+                  RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.widget_clock);
+                  views.setImageViewBitmap(R.id.clock, renderTime(context));
 
-                  RemoteViews views = new RemoteViews(
-                          context.getPackageName(),
-                          vertical ? R.layout.widget_vertical : R.layout.widget_horizontal);
+                  String pkg = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                          .getString(KEY_APP + id, null);
+                  if (pkg != null) {
+                      Intent launch = context.getPackageManager().getLaunchIntentForPackage(pkg);
+                      if (launch != null) {
+                          int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+                          if (Build.VERSION.SDK_INT >= 23) {
+                              flags |= PendingIntent.FLAG_IMMUTABLE;
+                          }
+                          // requestCode = id mantém um PendingIntent separado para cada widget
+                          PendingIntent pending = PendingIntent.getActivity(context, id, launch, flags);
+                          views.setOnClickPendingIntent(R.id.root, pending);
+                      }
+                  }
+                  manager.updateAppWidget(id, views);
+              }
 
+              /** Desenha "HH:mm" e já gira 90 graus no sentido horário. */
+              private static Bitmap renderTime(Context context) {
+                  String pattern = DateFormat.is24HourFormat(context) ? "HH:mm" : "hh:mm";
+                  String text = new SimpleDateFormat(pattern, Locale.US).format(new Date());
+
+                  Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  paint.setColor(TEXT_COLOR);
+                  paint.setTextSize(TEXT_SIZE_PX);
+                  paint.setTypeface(Typeface.DEFAULT);
+
+                  // Tamanho fixo (medido com "00:00") para o relógio não "pular" de tamanho a cada minuto
+                  float refWidth = paint.measureText("00:00");
+                  Rect digit = new Rect();
+                  paint.getTextBounds("0", 0, 1, digit);
+
+                  int w = (int) Math.ceil(refWidth) + 2 * PADDING_PX;   // largura da hora na horizontal
+                  int h = digit.height() + 2 * PADDING_PX;              // altura da hora na horizontal
+
+                  Bitmap bitmap = Bitmap.createBitmap(h, w, Bitmap.Config.ARGB_8888);   // já girado: largura = h, altura = w
+                  Canvas canvas = new Canvas(bitmap);
+                  canvas.translate(h, 0);
+                  canvas.rotate(90);
+
+                  float x = PADDING_PX + (refWidth - paint.measureText(text)) / 2f;
+                  float y = PADDING_PX - digit.top;
+                  canvas.drawText(text, x, y, paint);
+                  return bitmap;
+              }
+
+              // ---- Alarme que dispara na virada de cada minuto ----
+
+              private static PendingIntent tickIntent(Context context) {
                   Intent intent = new Intent(context, ClockWidgetProvider.class);
-                  intent.setAction(ACTION_TOGGLE);
-                  intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
-
+                  intent.setAction(ACTION_TICK);
                   int flags = PendingIntent.FLAG_UPDATE_CURRENT;
                   if (Build.VERSION.SDK_INT >= 23) {
                       flags |= PendingIntent.FLAG_IMMUTABLE;
                   }
-                  // requestCode = id garante um PendingIntent distinto para cada widget
-                  PendingIntent pending = PendingIntent.getBroadcast(context, id, intent, flags);
-                  views.setOnClickPendingIntent(R.id.root, pending);
+                  return PendingIntent.getBroadcast(context, 0, intent, flags);
+              }
 
-                  manager.updateAppWidget(id, views);
+              static void scheduleNextTick(Context context) {
+                  AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+                  if (am == null) return;
+
+                  long next = (System.currentTimeMillis() / 60000L + 1) * 60000L + 300L;
+                  PendingIntent pending = tickIntent(context);
+                  try {
+                      if (Build.VERSION.SDK_INT >= 23) {
+                          am.setExactAndAllowWhileIdle(AlarmManager.RTC, next, pending);
+                      } else {
+                          am.setExact(AlarmManager.RTC, next, pending);
+                      }
+                  } catch (SecurityException e) {
+                      // Android 12+ sem permissão de alarme exato: usa alarme aproximado
+                      am.set(AlarmManager.RTC, next, pending);
+                  }
               }
           }
           EOF_ARQUIVO
-          mkdir -p "$(dirname 'app/src/main/res/drawable/widget_bg.xml')"
-          cat > 'app/src/main/res/drawable/widget_bg.xml' <<'EOF_ARQUIVO'
-          <?xml version="1.0" encoding="utf-8"?>
-          <shape xmlns:android="http://schemas.android.com/apk/res/android"
-              android:shape="rectangle">
-              <solid android:color="#66000000" />
-              <corners android:radius="16dp" />
-          </shape>
+          mkdir -p "$(dirname 'app/src/main/java/com/exemplo/relogiowidget/ConfigActivity.java')"
+          cat > 'app/src/main/java/com/exemplo/relogiowidget/ConfigActivity.java' <<'EOF_ARQUIVO'
+          package com.exemplo.relogiowidget;
+
+          import android.app.Activity;
+          import android.appwidget.AppWidgetManager;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.pm.PackageManager;
+          import android.content.pm.ResolveInfo;
+          import android.graphics.drawable.Drawable;
+          import android.os.Bundle;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.widget.AdapterView;
+          import android.widget.ArrayAdapter;
+          import android.widget.ImageView;
+          import android.widget.ListView;
+          import android.widget.TextView;
+
+          import java.util.ArrayList;
+          import java.util.Collections;
+          import java.util.Comparator;
+          import java.util.List;
+
+          /** Aparece ao adicionar o widget: lista os apps instalados para escolher qual abrir ao tocar. */
+          public class ConfigActivity extends Activity {
+
+              private int appWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
+
+              private static class AppItem {
+                  final String pkg;       // null = não abrir nada
+                  final String label;
+                  final Drawable icon;
+
+                  AppItem(String pkg, String label, Drawable icon) {
+                      this.pkg = pkg;
+                      this.label = label;
+                      this.icon = icon;
+                  }
+              }
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  Bundle extras = getIntent().getExtras();
+                  if (extras != null) {
+                      appWidgetId = extras.getInt(
+                              AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID);
+                  }
+                  // Se a pessoa sair sem escolher, o Android cancela a adição do widget
+                  setResult(RESULT_CANCELED,
+                          new Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId));
+                  if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
+                      finish();
+                      return;
+                  }
+
+                  setTitle(R.string.escolha_app);
+
+                  PackageManager pm = getPackageManager();
+                  Intent main = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+                  List<ResolveInfo> found = pm.queryIntentActivities(main, 0);
+
+                  final List<AppItem> apps = new ArrayList<AppItem>();
+                  for (ResolveInfo info : found) {
+                      String pkg = info.activityInfo.packageName;
+                      if (pkg.equals(getPackageName())) continue;
+                      apps.add(new AppItem(pkg, info.loadLabel(pm).toString(), info.loadIcon(pm)));
+                  }
+                  Collections.sort(apps, new Comparator<AppItem>() {
+                      @Override
+                      public int compare(AppItem a, AppItem b) {
+                          return String.CASE_INSENSITIVE_ORDER.compare(a.label, b.label);
+                      }
+                  });
+
+                  final List<AppItem> items = new ArrayList<AppItem>();
+                  items.add(new AppItem(null, getString(R.string.nenhum), null));
+                  items.addAll(apps);
+
+                  ListView list = new ListView(this);
+                  list.setAdapter(new AppAdapter(items));
+                  list.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+                      @Override
+                      public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+                          choose(items.get(position));
+                      }
+                  });
+                  setContentView(list);
+              }
+
+              private void choose(AppItem item) {
+                  SharedPreferences.Editor editor =
+                          getSharedPreferences(ClockWidgetProvider.PREFS, Context.MODE_PRIVATE).edit();
+                  if (item.pkg == null) {
+                      editor.remove(ClockWidgetProvider.KEY_APP + appWidgetId);
+                  } else {
+                      editor.putString(ClockWidgetProvider.KEY_APP + appWidgetId, item.pkg);
+                  }
+                  editor.apply();
+
+                  // Com tela de configuração, o próprio app precisa desenhar o widget pela primeira vez
+                  ClockWidgetProvider.update(this, AppWidgetManager.getInstance(this), appWidgetId);
+                  ClockWidgetProvider.scheduleNextTick(this);
+
+                  setResult(RESULT_OK,
+                          new Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId));
+                  finish();
+              }
+
+              private class AppAdapter extends ArrayAdapter<AppItem> {
+                  AppAdapter(List<AppItem> items) {
+                      super(ConfigActivity.this, 0, items);
+                  }
+
+                  @Override
+                  public View getView(int position, View convertView, ViewGroup parent) {
+                      View row = convertView;
+                      if (row == null) {
+                          row = getLayoutInflater().inflate(R.layout.item_app, parent, false);
+                      }
+                      AppItem item = getItem(position);
+                      ((TextView) row.findViewById(R.id.label)).setText(item.label);
+                      ((ImageView) row.findViewById(R.id.icon)).setImageDrawable(item.icon);
+                      return row;
+                  }
+              }
+          }
           EOF_ARQUIVO
-          mkdir -p "$(dirname 'app/src/main/res/layout/widget_horizontal.xml')"
-          cat > 'app/src/main/res/layout/widget_horizontal.xml' <<'EOF_ARQUIVO'
+          mkdir -p "$(dirname 'app/src/main/res/layout/item_app.xml')"
+          cat > 'app/src/main/res/layout/item_app.xml' <<'EOF_ARQUIVO'
           <?xml version="1.0" encoding="utf-8"?>
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              android:id="@+id/root"
               android:layout_width="match_parent"
-              android:layout_height="match_parent"
-              android:background="@drawable/widget_bg"
-              android:gravity="center"
+              android:layout_height="wrap_content"
+              android:gravity="center_vertical"
               android:orientation="horizontal"
-              android:padding="8dp">
+              android:padding="12dp">
 
-              <TextClock
-                  android:layout_width="wrap_content"
+              <ImageView
+                  android:id="@+id/icon"
+                  android:layout_width="40dp"
+                  android:layout_height="40dp"
+                  android:contentDescription="@null" />
+
+              <TextView
+                  android:id="@+id/label"
+                  android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:format12Hour="hh:mm"
-                  android:format24Hour="HH:mm"
-                  android:includeFontPadding="false"
+                  android:layout_marginLeft="16dp"
+                  android:layout_marginStart="16dp"
                   android:singleLine="true"
-                  android:textColor="#FFFFFF"
-                  android:textSize="48sp" />
+                  android:textSize="16sp" />
 
           </LinearLayout>
           EOF_ARQUIVO
-          mkdir -p "$(dirname 'app/src/main/res/layout/widget_vertical.xml')"
-          cat > 'app/src/main/res/layout/widget_vertical.xml' <<'EOF_ARQUIVO'
+          mkdir -p "$(dirname 'app/src/main/res/layout/widget_clock.xml')"
+          cat > 'app/src/main/res/layout/widget_clock.xml' <<'EOF_ARQUIVO'
           <?xml version="1.0" encoding="utf-8"?>
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+          <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
               android:id="@+id/root"
               android:layout_width="match_parent"
-              android:layout_height="match_parent"
-              android:background="@drawable/widget_bg"
-              android:gravity="center"
-              android:orientation="vertical"
-              android:padding="8dp">
+              android:layout_height="match_parent">
 
-              <!-- Horas em cima -->
-              <TextClock
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:format12Hour="hh"
-                  android:format24Hour="HH"
-                  android:includeFontPadding="false"
-                  android:singleLine="true"
-                  android:textColor="#FFFFFF"
-                  android:textSize="48sp" />
+              <ImageView
+                  android:id="@+id/clock"
+                  android:layout_width="match_parent"
+                  android:layout_height="match_parent"
+                  android:contentDescription="@string/widget_name"
+                  android:scaleType="fitCenter" />
 
-              <!-- Minutos embaixo -->
-              <TextClock
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:format12Hour="mm"
-                  android:format24Hour="mm"
-                  android:includeFontPadding="false"
-                  android:singleLine="true"
-                  android:textColor="#FFFFFF"
-                  android:textSize="48sp" />
-
-          </LinearLayout>
+          </FrameLayout>
           EOF_ARQUIVO
           mkdir -p "$(dirname 'app/src/main/res/values/strings.xml')"
           cat > 'app/src/main/res/values/strings.xml' <<'EOF_ARQUIVO'
@@ -232,17 +459,20 @@ jobs:
           <resources>
               <string name="app_name">Relógio Widget</string>
               <string name="widget_name">Relógio digital</string>
+              <string name="escolha_app">Abrir ao tocar:</string>
+              <string name="nenhum">Nenhum (não abrir nada)</string>
           </resources>
           EOF_ARQUIVO
           mkdir -p "$(dirname 'app/src/main/res/xml/clock_widget_info.xml')"
           cat > 'app/src/main/res/xml/clock_widget_info.xml' <<'EOF_ARQUIVO'
           <?xml version="1.0" encoding="utf-8"?>
           <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-              android:initialLayout="@layout/widget_horizontal"
-              android:minWidth="180dp"
-              android:minHeight="70dp"
-              android:minResizeWidth="70dp"
-              android:minResizeHeight="70dp"
+              android:configure="com.exemplo.relogiowidget.ConfigActivity"
+              android:initialLayout="@layout/widget_clock"
+              android:minHeight="180dp"
+              android:minResizeHeight="110dp"
+              android:minResizeWidth="40dp"
+              android:minWidth="70dp"
               android:resizeMode="horizontal|vertical"
               android:updatePeriodMillis="0"
               android:widgetCategory="home_screen" />
@@ -277,6 +507,10 @@ jobs:
           rootProject.name = "RelogioWidget"
           include ':app'
           EOF_ARQUIVO
+
+      - name: Criar chave de assinatura
+        run: |
+          echo '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' | base64 -d > app/debug.keystore
 
       - name: Compilar
         run: gradle assembleDebug
