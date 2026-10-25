@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportHeight="48"
+    android:viewportWidth="48">
+
+    <!-- Fundo escuro de cantos arredondados -->
+    <path
+        android:fillColor="#263238"
+        android:pathData="M8,0 L40,0 A8,8 0 0 1 48,8 L48,40 A8,8 0 0 1 40,48 L8,48 A8,8 0 0 1 0,40 L0,8 A8,8 0 0 1 8,0 Z" />
+
+    <!-- Seta circular (sentido horário) em volta do relógio -->
+    <path
+        android:pathData="M33.75,7.11 A19.5,19.5 0 1 1 7.11,14.25"
+        android:strokeColor="#4FC3F7"
+        android:strokeLineCap="round"
+        android:strokeWidth="3" />
+    <path
+        android:fillColor="#4FC3F7"
+        android:pathData="M3.2,12 L9.6,9.9 L11,16.5 Z" />
+
+    <!-- Visor do relógio digital -->
+    <path
+        android:pathData="M14.5,18.5 L33.5,18.5 L33.5,29.5 L14.5,29.5 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2.5" />
+
+    <!-- Dígitos: 1 : 1 -->
+    <path
+        android:pathData="M19.5,21.5 L19.5,26.5 M28.5,21.5 L28.5,26.5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="2" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M22.8,22.3 L25.2,22.3 L25.2,24.7 L22.8,24.7 Z M22.8,25.3 L25.2,25.3 L25.2,27.7 L22.8,27.7 Z" />
+</vector>

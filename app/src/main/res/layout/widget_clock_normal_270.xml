@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Gerado por tools/gerar_layouts.sh (fonte sans-serif, rotação 270 graus). Não edite à mão. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <TextClock
+        android:id="@+id/clock"
+        android:layout_width="1000dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:fontFamily="sans-serif"
+        android:format12Hour="hh:mm"
+        android:format24Hour="HH:mm"
+        android:gravity="center"
+        android:includeFontPadding="false"
+        android:rotation="270"
+        android:singleLine="true"
+        android:textColor="#FFFFFF"
+        android:textSize="48sp" />
+
+</FrameLayout>

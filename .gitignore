@@ -1,0 +1,10 @@
+# Gradle e Android Studio
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+
+# Saída do build
+saida/
+*.apk

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Relógio Widget</string>
+    <string name="widget_name">Relógio digital</string>
+    <string name="escolha_app">Abrir ao tocar:</string>
+    <string name="escolher_app">Escolher app…</string>
+
+    <string name="rotulo_toque">Ao tocar no relógio:</string>
+    <string name="toque_app">Abrir um app</string>
+    <string name="toque_nada">Não fazer nada</string>
+    <string name="toque_tela">Manter a tela ligada (liga e desliga a cada toque)</string>
+    <string name="explicacao_tela">Com a tela ligada, aparece um ícone de cadeado na barra de status e a tela não apaga sozinha. Toque no relógio de novo, ou na notificação, para desligar.</string>
+    <string name="rotulo_app">App que será aberto:</string>
+
+    <string name="rotulo_posicao">Posição do relógio (em pixels)</string>
+    <string name="explicacao_posicao">Positivo move para a direita (horizontal) ou para baixo (vertical). Negativo move para a esquerda ou para cima. Use 0 para centralizar.</string>
+    <string name="horizontal">Horizontal (X)</string>
+    <string name="vertical">Vertical (Y)</string>
+
+    <string name="rotulo_rotacao">Rotação do relógio</string>
+    <string name="rot_0">0° (horizontal)</string>
+    <string name="rot_90">90° para a direita (padrão)</string>
+    <string name="rot_180">180° (de cabeça para baixo)</string>
+    <string name="rot_270">270° (lido de baixo para cima)</string>
+
+    <string name="rotulo_fonte">Fonte</string>
+    <string name="fonte_normal">Normal</string>
+    <string name="fonte_leve">Leve</string>
+    <string name="fonte_fina">Fina</string>
+    <string name="fonte_media">Média</string>
+    <string name="fonte_preta">Preta</string>
+    <string name="fonte_condensada">Condensada</string>
+    <string name="fonte_serifada">Serifada</string>
+    <string name="fonte_mono">Monoespaçada</string>
+    <string name="fonte_casual">Casual</string>
+    <string name="fonte_cursiva">Cursiva</string>
+
+    <string name="rotulo_cor">Cor da letra</string>
+    <string name="cor_branco">Branco</string>
+    <string name="cor_cinza">Cinza claro</string>
+    <string name="cor_amarelo">Amarelo</string>
+    <string name="cor_laranja">Laranja</string>
+    <string name="cor_vermelho">Vermelho</string>
+    <string name="cor_rosa">Rosa</string>
+    <string name="cor_roxo">Roxo</string>
+    <string name="cor_azul">Azul</string>
+    <string name="cor_ciano">Ciano</string>
+    <string name="cor_verde">Verde</string>
+    <string name="personalizar">Personalizar</string>
+    <string name="dica_hex">#RRGGBB</string>
+    <string name="hex_invalido">Código HEX inválido. Use 6 dígitos, como #FF9800.</string>
+
+    <string name="rotulo_opacidade">Opacidade da letra (10% a 100%)</string>
+
+    <string name="salvar">Salvar</string>
+    <string name="salvo">Salvo!</string>
+    <string name="tela_ligada">Tela ligada</string>
+    <string name="toque_para_desligar">Toque para a tela voltar a apagar sozinha</string>
+</resources>

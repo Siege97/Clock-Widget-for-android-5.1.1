@@ -1,0 +1,37 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.exemplo.relogiowidget'
+    compileSdk 34
+
+    // Chave de assinatura fixa: assim cada APK novo instala por cima do anterior
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'chave'
+            keyPassword 'android'
+        }
+    }
+
+    defaultConfig {
+        applicationId "com.exemplo.relogiowidget"
+        minSdk 22          // Android 5.1.1
+        targetSdk 34
+        versionCode 8
+        versionName "4.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
