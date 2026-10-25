@@ -43,8 +43,8 @@ jobs:
                   applicationId "com.exemplo.relogiowidget"
                   minSdk 22          // Android 5.1.1
                   targetSdk 34
-                  versionCode 3
-                  versionName "2.1"
+                  versionCode 4
+                  versionName "3.0"
               }
 
               buildTypes {
@@ -74,9 +74,22 @@ jobs:
 
               <application
                   android:allowBackup="true"
+                  android:icon="@drawable/ic_launcher"
                   android:label="@string/app_name">
 
-                  <!-- Tela que aparece ao adicionar o widget: escolher qual app abrir ao tocar -->
+                  <!-- Ícone do app: escolher o app do toque e ajustar a posição -->
+                  <activity
+                      android:name=".SettingsActivity"
+                      android:exported="true"
+                      android:label="@string/app_name"
+                      android:theme="@android:style/Theme.DeviceDefault.Light">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <!-- Lista de apps: aparece ao adicionar o widget, ao tocar sem app escolhido e nos ajustes -->
                   <activity
                       android:name=".ConfigActivity"
                       android:exported="true"
@@ -115,6 +128,8 @@ jobs:
           import android.content.ComponentName;
           import android.content.Context;
           import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.res.Configuration;
           import android.graphics.Bitmap;
           import android.graphics.Canvas;
           import android.graphics.Color;
@@ -122,6 +137,7 @@ jobs:
           import android.graphics.Rect;
           import android.graphics.Typeface;
           import android.os.Build;
+          import android.os.Bundle;
           import android.text.format.DateFormat;
           import android.widget.RemoteViews;
 
@@ -133,18 +149,24 @@ jobs:
            * Relógio digital girado 90 graus para a direita.
            *
            * Widgets não podem girar views no Android 5.1, então a hora é desenhada
-           * já girada dentro de um Bitmap, que é trocado a cada minuto por um alarme.
+           * já girada dentro de um Bitmap do tamanho do widget, trocado a cada minuto por um alarme.
            */
           public class ClockWidgetProvider extends AppWidgetProvider {
 
+              // Configurações (valem para todos os widgets)
               static final String PREFS = "clock_prefs";
-              static final String KEY_APP = "app_";
+              static final String KEY_APP = "app_pkg";
+              static final String KEY_OFFSET_X = "offset_x";
+              static final String KEY_OFFSET_Y = "offset_y";
+
               private static final String ACTION_TICK = "com.exemplo.relogiowidget.TICK";
 
               // ---- Ajustes visuais (mude aqui) ----
               private static final int TEXT_COLOR = Color.WHITE;
-              private static final float TEXT_SIZE_PX = 280f;   // só define a nitidez; o widget se ajusta ao tamanho que você der
-              private static final int PADDING_PX = 12;
+              private static final float MARGIN_DP = 4f;       // folga entre o relógio e a borda do widget
+              private static final int DEFAULT_W_DP = 70;      // usados se o launcher não informar o tamanho
+              private static final int DEFAULT_H_DP = 250;
+              private static final int MAX_BITMAP_SIDE = 1600; // limite de segurança de memória
 
               @Override
               public void onUpdate(Context context, AppWidgetManager manager, int[] appWidgetIds) {
@@ -155,18 +177,20 @@ jobs:
               }
 
               @Override
+              public void onAppWidgetOptionsChanged(Context context, AppWidgetManager manager,
+                                                    int appWidgetId, Bundle newOptions) {
+                  // O widget foi redimensionado: redesenha no novo tamanho
+                  update(context, manager, appWidgetId);
+              }
+
+              @Override
               public void onReceive(Context context, Intent intent) {
                   super.onReceive(context, intent);
                   String action = intent.getAction();
                   if (ACTION_TICK.equals(action)
                           || Intent.ACTION_TIME_CHANGED.equals(action)
                           || Intent.ACTION_TIMEZONE_CHANGED.equals(action)) {
-                      AppWidgetManager manager = AppWidgetManager.getInstance(context);
-                      int[] ids = manager.getAppWidgetIds(new ComponentName(context, ClockWidgetProvider.class));
-                      for (int id : ids) {
-                          update(context, manager, id);
-                      }
-                      if (ids.length > 0) {
+                      if (updateAll(context) > 0) {
                           scheduleNextTick(context);
                       }
                   }
@@ -185,30 +209,31 @@ jobs:
                   }
               }
 
-              @Override
-              public void onDeleted(Context context, int[] appWidgetIds) {
-                  android.content.SharedPreferences.Editor editor =
-                          context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
-                  for (int id : appWidgetIds) {
-                      editor.remove(KEY_APP + id);
+              /** Redesenha todos os widgets na tela. Devolve quantos são. */
+              static int updateAll(Context context) {
+                  AppWidgetManager manager = AppWidgetManager.getInstance(context);
+                  int[] ids = manager.getAppWidgetIds(new ComponentName(context, ClockWidgetProvider.class));
+                  for (int id : ids) {
+                      update(context, manager, id);
                   }
-                  editor.apply();
+                  return ids.length;
               }
 
               /** Redesenha um widget: hora girada + toque que abre o app escolhido. */
               static void update(Context context, AppWidgetManager manager, int id) {
-                  RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.widget_clock);
-                  views.setImageViewBitmap(R.id.clock, renderTime(context));
+                  SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
 
-                  String pkg = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                          .getString(KEY_APP + id, null);
+                  RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.widget_clock);
+                  views.setImageViewBitmap(R.id.clock, renderTime(context, manager, id,
+                          prefs.getInt(KEY_OFFSET_X, 0), prefs.getInt(KEY_OFFSET_Y, 0)));
+
                   Intent launch = null;
+                  String pkg = prefs.getString(KEY_APP, null);
                   if (pkg != null) {
                       launch = context.getPackageManager().getLaunchIntentForPackage(pkg);
                   }
                   if (launch == null) {
-                      // Nenhum app escolhido (ou o app foi desinstalado): o toque abre a lista para escolher.
-                      // Serve também para launchers que não abrem a tela de configuração sozinhos.
+                      // Nenhum app escolhido (ou o app foi desinstalado): o toque abre a lista para escolher
                       launch = new Intent(context, ConfigActivity.class);
                       launch.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
                       launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -220,34 +245,67 @@ jobs:
                   // requestCode = id mantém um PendingIntent separado para cada widget
                   PendingIntent pending = PendingIntent.getActivity(context, id, launch, flags);
                   views.setOnClickPendingIntent(R.id.root, pending);
+
                   manager.updateAppWidget(id, views);
               }
 
-              /** Desenha "HH:mm" e já gira 90 graus no sentido horário. */
-              private static Bitmap renderTime(Context context) {
+              /**
+               * Desenha "HH:mm" girado 90 graus no sentido horário, centralizado no widget
+               * e deslocado por (dx, dy) pixels. Positivo = direita / baixo.
+               */
+              private static Bitmap renderTime(Context context, AppWidgetManager manager, int id,
+                                               int dx, int dy) {
+                  float density = context.getResources().getDisplayMetrics().density;
+                  boolean landscape = context.getResources().getConfiguration().orientation
+                          == Configuration.ORIENTATION_LANDSCAPE;
+
+                  // Tamanho atual do widget em dp, informado pelo launcher
+                  Bundle options = manager.getAppWidgetOptions(id);
+                  int wDp = 0;
+                  int hDp = 0;
+                  if (options != null) {
+                      wDp = options.getInt(landscape
+                              ? AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH
+                              : AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0);
+                      hDp = options.getInt(landscape
+                              ? AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT
+                              : AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0);
+                  }
+                  if (wDp <= 0 || hDp <= 0) {
+                      wDp = DEFAULT_W_DP;
+                      hDp = DEFAULT_H_DP;
+                  }
+                  int width = Math.min(MAX_BITMAP_SIDE, Math.max(1, Math.round(wDp * density)));
+                  int height = Math.min(MAX_BITMAP_SIDE, Math.max(1, Math.round(hDp * density)));
+
                   String pattern = DateFormat.is24HourFormat(context) ? "HH:mm" : "hh:mm";
                   String text = new SimpleDateFormat(pattern, Locale.US).format(new Date());
 
                   Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
                   paint.setColor(TEXT_COLOR);
-                  paint.setTextSize(TEXT_SIZE_PX);
                   paint.setTypeface(Typeface.DEFAULT);
 
-                  // Tamanho fixo (medido com "00:00") para o relógio não "pular" de tamanho a cada minuto
-                  float refWidth = paint.measureText("00:00");
+                  // Escolhe o maior tamanho de letra que cabe, medido com "00:00" (tamanho estável)
+                  final float base = 100f;
+                  paint.setTextSize(base);
                   Rect digit = new Rect();
                   paint.getTextBounds("0", 0, 1, digit);
+                  float refLength = paint.measureText("00:00");     // vira a altura depois de girar
+                  float margin = MARGIN_DP * density;
+                  float scale = Math.min((width - 2 * margin) / Math.max(1, digit.height()),
+                          (height - 2 * margin) / Math.max(1f, refLength));
+                  if (scale <= 0f) {
+                      scale = 1f;
+                  }
+                  paint.setTextSize(base * scale);
+                  paint.getTextBounds("0", 0, 1, digit);
 
-                  int w = (int) Math.ceil(refWidth) + 2 * PADDING_PX;   // largura da hora na horizontal
-                  int h = digit.height() + 2 * PADDING_PX;              // altura da hora na horizontal
-
-                  Bitmap bitmap = Bitmap.createBitmap(h, w, Bitmap.Config.ARGB_8888);   // já girado: largura = h, altura = w
+                  Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
                   Canvas canvas = new Canvas(bitmap);
-                  canvas.translate(h, 0);
+                  canvas.translate(width / 2f + dx, height / 2f + dy);
                   canvas.rotate(90);
-
-                  float x = PADDING_PX + (refWidth - paint.measureText(text)) / 2f;
-                  float y = PADDING_PX - digit.top;
+                  float x = -paint.measureText(text) / 2f;
+                  float y = -(digit.top + digit.bottom) / 2f;
                   canvas.drawText(text, x, y, paint);
                   return bitmap;
               }
@@ -291,7 +349,6 @@ jobs:
           import android.appwidget.AppWidgetManager;
           import android.content.Context;
           import android.content.Intent;
-          import android.content.SharedPreferences;
           import android.content.pm.PackageManager;
           import android.content.pm.ResolveInfo;
           import android.graphics.drawable.Drawable;
@@ -309,13 +366,16 @@ jobs:
           import java.util.Comparator;
           import java.util.List;
 
-          /** Aparece ao adicionar o widget: lista os apps instalados para escolher qual abrir ao tocar. */
+          /**
+           * Lista os apps instalados para escolher qual abrir ao tocar no relógio.
+           * Aparece ao adicionar o widget, ao tocar nele sem app escolhido e na tela de ajustes.
+           */
           public class ConfigActivity extends Activity {
 
               private int appWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID;
 
               private static class AppItem {
-                  final String pkg;       // null = não abrir nada
+                  final String pkg;
                   final String label;
                   final Drawable icon;
 
@@ -338,10 +398,6 @@ jobs:
                   // Se a pessoa sair sem escolher, o Android cancela a adição do widget
                   setResult(RESULT_CANCELED,
                           new Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId));
-                  if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) {
-                      finish();
-                      return;
-                  }
 
                   setTitle(R.string.escolha_app);
 
@@ -349,20 +405,18 @@ jobs:
                   Intent main = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
                   List<ResolveInfo> found = pm.queryIntentActivities(main, 0);
 
-                  final List<AppItem> apps = new ArrayList<AppItem>();
+                  final List<AppItem> items = new ArrayList<AppItem>();
                   for (ResolveInfo info : found) {
                       String pkg = info.activityInfo.packageName;
                       if (pkg.equals(getPackageName())) continue;
-                      apps.add(new AppItem(pkg, info.loadLabel(pm).toString(), info.loadIcon(pm)));
+                      items.add(new AppItem(pkg, info.loadLabel(pm).toString(), info.loadIcon(pm)));
                   }
-                  Collections.sort(apps, new Comparator<AppItem>() {
+                  Collections.sort(items, new Comparator<AppItem>() {
                       @Override
                       public int compare(AppItem a, AppItem b) {
                           return String.CASE_INSENSITIVE_ORDER.compare(a.label, b.label);
                       }
                   });
-
-                  final List<AppItem> items = apps;
 
                   ListView list = new ListView(this);
                   list.setAdapter(new AppAdapter(items));
@@ -376,17 +430,16 @@ jobs:
               }
 
               private void choose(AppItem item) {
-                  SharedPreferences.Editor editor =
-                          getSharedPreferences(ClockWidgetProvider.PREFS, Context.MODE_PRIVATE).edit();
-                  if (item.pkg == null) {
-                      editor.remove(ClockWidgetProvider.KEY_APP + appWidgetId);
-                  } else {
-                      editor.putString(ClockWidgetProvider.KEY_APP + appWidgetId, item.pkg);
-                  }
-                  editor.apply();
+                  getSharedPreferences(ClockWidgetProvider.PREFS, Context.MODE_PRIVATE)
+                          .edit()
+                          .putString(ClockWidgetProvider.KEY_APP, item.pkg)
+                          .apply();
 
-                  // Com tela de configuração, o próprio app precisa desenhar o widget pela primeira vez
-                  ClockWidgetProvider.update(this, AppWidgetManager.getInstance(this), appWidgetId);
+                  // Com tela de configuração, o próprio app precisa desenhar o widget novo pela primeira vez
+                  if (appWidgetId != AppWidgetManager.INVALID_APPWIDGET_ID) {
+                      ClockWidgetProvider.update(this, AppWidgetManager.getInstance(this), appWidgetId);
+                  }
+                  ClockWidgetProvider.updateAll(this);
                   ClockWidgetProvider.scheduleNextTick(this);
 
                   setResult(RESULT_OK,
@@ -412,6 +465,225 @@ jobs:
                   }
               }
           }
+          EOF_ARQUIVO
+          mkdir -p "$(dirname 'app/src/main/java/com/exemplo/relogiowidget/SettingsActivity.java')"
+          cat > 'app/src/main/java/com/exemplo/relogiowidget/SettingsActivity.java' <<'EOF_ARQUIVO'
+          package com.exemplo.relogiowidget;
+
+          import android.app.Activity;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.pm.PackageManager;
+          import android.os.Bundle;
+          import android.view.View;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.Toast;
+
+          /** Tela do ícone do app: escolher o app do toque e ajustar a posição do relógio em pixels. */
+          public class SettingsActivity extends Activity {
+
+              private static final int REQ_PICK = 1;
+              private static final int LIMIT = 5000;   // limite de segurança do deslocamento
+
+              private Button appButton;
+              private EditText offsetX;
+              private EditText offsetY;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  setContentView(R.layout.activity_settings);
+
+                  appButton = (Button) findViewById(R.id.btn_app);
+                  offsetX = (EditText) findViewById(R.id.offset_x);
+                  offsetY = (EditText) findViewById(R.id.offset_y);
+
+                  SharedPreferences prefs = prefs();
+                  offsetX.setText(String.valueOf(prefs.getInt(ClockWidgetProvider.KEY_OFFSET_X, 0)));
+                  offsetY.setText(String.valueOf(prefs.getInt(ClockWidgetProvider.KEY_OFFSET_Y, 0)));
+                  showCurrentApp();
+
+                  appButton.setOnClickListener(new View.OnClickListener() {
+                      @Override
+                      public void onClick(View v) {
+                          startActivityForResult(
+                                  new Intent(SettingsActivity.this, ConfigActivity.class), REQ_PICK);
+                      }
+                  });
+
+                  findViewById(R.id.btn_save).setOnClickListener(new View.OnClickListener() {
+                      @Override
+                      public void onClick(View v) {
+                          save();
+                      }
+                  });
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (requestCode == REQ_PICK) {
+                      showCurrentApp();
+                  }
+              }
+
+              private SharedPreferences prefs() {
+                  return getSharedPreferences(ClockWidgetProvider.PREFS, Context.MODE_PRIVATE);
+              }
+
+              private void showCurrentApp() {
+                  String pkg = prefs().getString(ClockWidgetProvider.KEY_APP, null);
+                  CharSequence label = null;
+                  if (pkg != null) {
+                      PackageManager pm = getPackageManager();
+                      try {
+                          label = pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0));
+                      } catch (PackageManager.NameNotFoundException e) {
+                          label = null;
+                      }
+                  }
+                  appButton.setText(label != null ? label : getString(R.string.escolher_app));
+              }
+
+              private void save() {
+                  prefs().edit()
+                          .putInt(ClockWidgetProvider.KEY_OFFSET_X, parse(offsetX))
+                          .putInt(ClockWidgetProvider.KEY_OFFSET_Y, parse(offsetY))
+                          .apply();
+                  ClockWidgetProvider.updateAll(this);
+                  Toast.makeText(this, R.string.salvo, Toast.LENGTH_SHORT).show();
+              }
+
+              /** Lê um número inteiro (aceita negativo). Vazio ou inválido vira 0. */
+              private static int parse(EditText field) {
+                  String s = field.getText().toString().trim();
+                  try {
+                      int value = Integer.parseInt(s);
+                      return Math.max(-LIMIT, Math.min(LIMIT, value));
+                  } catch (NumberFormatException e) {
+                      return 0;
+                  }
+              }
+          }
+          EOF_ARQUIVO
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_launcher.xml')"
+          cat > 'app/src/main/res/drawable/ic_launcher.xml' <<'EOF_ARQUIVO'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="48dp"
+              android:height="48dp"
+              android:viewportHeight="48"
+              android:viewportWidth="48">
+
+              <!-- Círculo escuro -->
+              <path
+                  android:fillColor="#263238"
+                  android:pathData="M24,24m-22,0a22,22 0 1,1 44,0a22,22 0 1,1 -44,0" />
+
+              <!-- Ponteiros -->
+              <path
+                  android:pathData="M24,11 L24,24 L33,29"
+                  android:strokeColor="#FFFFFF"
+                  android:strokeLineCap="round"
+                  android:strokeLineJoin="round"
+                  android:strokeWidth="3" />
+          </vector>
+          EOF_ARQUIVO
+          mkdir -p "$(dirname 'app/src/main/res/layout/activity_settings.xml')"
+          cat > 'app/src/main/res/layout/activity_settings.xml' <<'EOF_ARQUIVO'
+          <?xml version="1.0" encoding="utf-8"?>
+          <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent">
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical"
+                  android:padding="16dp">
+
+                  <TextView
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/rotulo_app"
+                      android:textSize="16sp"
+                      android:textStyle="bold" />
+
+                  <Button
+                      android:id="@+id/btn_app"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:layout_marginBottom="24dp" />
+
+                  <TextView
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/rotulo_posicao"
+                      android:textSize="16sp"
+                      android:textStyle="bold" />
+
+                  <TextView
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:layout_marginBottom="8dp"
+                      android:text="@string/explicacao_posicao"
+                      android:textSize="13sp" />
+
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:gravity="center_vertical"
+                      android:orientation="horizontal">
+
+                      <TextView
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:text="@string/horizontal" />
+
+                      <EditText
+                          android:id="@+id/offset_x"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:gravity="end"
+                          android:inputType="numberSigned"
+                          android:maxLength="6" />
+                  </LinearLayout>
+
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:gravity="center_vertical"
+                      android:orientation="horizontal">
+
+                      <TextView
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:text="@string/vertical" />
+
+                      <EditText
+                          android:id="@+id/offset_y"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:gravity="end"
+                          android:inputType="numberSigned"
+                          android:maxLength="6" />
+                  </LinearLayout>
+
+                  <Button
+                      android:id="@+id/btn_save"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="16dp"
+                      android:text="@string/salvar" />
+
+              </LinearLayout>
+          </ScrollView>
           EOF_ARQUIVO
           mkdir -p "$(dirname 'app/src/main/res/layout/item_app.xml')"
           cat > 'app/src/main/res/layout/item_app.xml' <<'EOF_ARQUIVO'
@@ -464,7 +736,14 @@ jobs:
               <string name="app_name">Relógio Widget</string>
               <string name="widget_name">Relógio digital</string>
               <string name="escolha_app">Abrir ao tocar:</string>
-              <string name="nenhum">Nenhum (não abrir nada)</string>
+              <string name="escolher_app">Escolher app…</string>
+              <string name="rotulo_app">Ao tocar no relógio, abrir:</string>
+              <string name="rotulo_posicao">Posição do relógio (em pixels)</string>
+              <string name="explicacao_posicao">Positivo move para a direita (horizontal) ou para baixo (vertical). Negativo move para a esquerda ou para cima. Use 0 para centralizar.</string>
+              <string name="horizontal">Horizontal (X)</string>
+              <string name="vertical">Vertical (Y)</string>
+              <string name="salvar">Salvar</string>
+              <string name="salvo">Salvo!</string>
           </resources>
           EOF_ARQUIVO
           mkdir -p "$(dirname 'app/src/main/res/xml/clock_widget_info.xml')"
