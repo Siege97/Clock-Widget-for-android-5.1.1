@@ -43,8 +43,8 @@ jobs:
                   applicationId "com.exemplo.relogiowidget"
                   minSdk 22          // Android 5.1.1
                   targetSdk 34
-                  versionCode 2
-                  versionName "2.0"
+                  versionCode 3
+                  versionName "2.1"
               }
 
               buildTypes {
@@ -202,18 +202,24 @@ jobs:
 
                   String pkg = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                           .getString(KEY_APP + id, null);
+                  Intent launch = null;
                   if (pkg != null) {
-                      Intent launch = context.getPackageManager().getLaunchIntentForPackage(pkg);
-                      if (launch != null) {
-                          int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-                          if (Build.VERSION.SDK_INT >= 23) {
-                              flags |= PendingIntent.FLAG_IMMUTABLE;
-                          }
-                          // requestCode = id mantém um PendingIntent separado para cada widget
-                          PendingIntent pending = PendingIntent.getActivity(context, id, launch, flags);
-                          views.setOnClickPendingIntent(R.id.root, pending);
-                      }
+                      launch = context.getPackageManager().getLaunchIntentForPackage(pkg);
                   }
+                  if (launch == null) {
+                      // Nenhum app escolhido (ou o app foi desinstalado): o toque abre a lista para escolher.
+                      // Serve também para launchers que não abrem a tela de configuração sozinhos.
+                      launch = new Intent(context, ConfigActivity.class);
+                      launch.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
+                      launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                  }
+                  int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+                  if (Build.VERSION.SDK_INT >= 23) {
+                      flags |= PendingIntent.FLAG_IMMUTABLE;
+                  }
+                  // requestCode = id mantém um PendingIntent separado para cada widget
+                  PendingIntent pending = PendingIntent.getActivity(context, id, launch, flags);
+                  views.setOnClickPendingIntent(R.id.root, pending);
                   manager.updateAppWidget(id, views);
               }
 
@@ -356,9 +362,7 @@ jobs:
                       }
                   });
 
-                  final List<AppItem> items = new ArrayList<AppItem>();
-                  items.add(new AppItem(null, getString(R.string.nenhum), null));
-                  items.addAll(apps);
+                  final List<AppItem> items = apps;
 
                   ListView list = new ListView(this);
                   list.setAdapter(new AppAdapter(items));
