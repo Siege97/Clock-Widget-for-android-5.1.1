@@ -43,8 +43,8 @@ jobs:
                   applicationId "com.exemplo.relogiowidget"
                   minSdk 22          // Android 5.1.1
                   targetSdk 34
-                  versionCode 5
-                  versionName "3.1"
+                  versionCode 6
+                  versionName "3.2"
               }
 
               buildTypes {
@@ -63,6 +63,11 @@ jobs:
           cat > 'app/src/main/AndroidManifest.xml' <<'EOF_ARQUIVO'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <!-- Manter a tela ligada: trava de tela + serviço em primeiro plano (com ícone na barra de status) -->
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
               <!-- Permite listar os apps instalados na tela de escolha (Android 11+) -->
               <queries>
@@ -98,6 +103,15 @@ jobs:
                           <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
                       </intent-filter>
                   </activity>
+
+                  <service
+                      android:name=".KeepAwakeService"
+                      android:exported="false"
+                      android:foregroundServiceType="specialUse">
+                      <property
+                          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                          android:value="manter_tela_ligada" />
+                  </service>
 
                   <receiver
                       android:name=".ClockWidgetProvider"
@@ -158,6 +172,10 @@ jobs:
               static final String KEY_APP = "app_pkg";
               static final String KEY_OFFSET_X = "offset_x";
               static final String KEY_OFFSET_Y = "offset_y";
+              static final String KEY_ACTION = "tap_action";   // o que o toque no relógio faz
+              static final String TAP_APP = "app";             // abre o app escolhido
+              static final String TAP_NONE = "none";           // não faz nada
+              static final String TAP_AWAKE = "awake";         // liga/desliga "tela sempre ligada"
 
               private static final String ACTION_TICK = "com.exemplo.relogiowidget.TICK";
 
@@ -227,24 +245,32 @@ jobs:
                   views.setImageViewBitmap(R.id.clock, renderTime(context, manager, id,
                           prefs.getInt(KEY_OFFSET_X, 0), prefs.getInt(KEY_OFFSET_Y, 0)));
 
-                  Intent launch = null;
-                  String pkg = prefs.getString(KEY_APP, null);
-                  if (pkg != null) {
-                      launch = context.getPackageManager().getLaunchIntentForPackage(pkg);
+                  String action = prefs.getString(KEY_ACTION, TAP_APP);
+                  PendingIntent pending = null;
+                  if (TAP_AWAKE.equals(action)) {
+                      pending = KeepAwakeService.toggleIntent(context);
+                  } else if (!TAP_NONE.equals(action)) {
+                      Intent launch = null;
+                      String pkg = prefs.getString(KEY_APP, null);
+                      if (pkg != null) {
+                          launch = context.getPackageManager().getLaunchIntentForPackage(pkg);
+                      }
+                      if (launch == null) {
+                          // Nenhum app escolhido (ou o app foi desinstalado): o toque abre a lista para escolher
+                          launch = new Intent(context, ConfigActivity.class);
+                          launch.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
+                          launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                      }
+                      int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+                      if (Build.VERSION.SDK_INT >= 23) {
+                          flags |= PendingIntent.FLAG_IMMUTABLE;
+                      }
+                      // requestCode = id mantém um PendingIntent separado para cada widget
+                      pending = PendingIntent.getActivity(context, id, launch, flags);
                   }
-                  if (launch == null) {
-                      // Nenhum app escolhido (ou o app foi desinstalado): o toque abre a lista para escolher
-                      launch = new Intent(context, ConfigActivity.class);
-                      launch.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
-                      launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                  if (pending != null) {
+                      views.setOnClickPendingIntent(R.id.root, pending);
                   }
-                  int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-                  if (Build.VERSION.SDK_INT >= 23) {
-                      flags |= PendingIntent.FLAG_IMMUTABLE;
-                  }
-                  // requestCode = id mantém um PendingIntent separado para cada widget
-                  PendingIntent pending = PendingIntent.getActivity(context, id, launch, flags);
-                  views.setOnClickPendingIntent(R.id.root, pending);
 
                   manager.updateAppWidget(id, views);
               }
@@ -437,6 +463,7 @@ jobs:
                   getSharedPreferences(ClockWidgetProvider.PREFS, Context.MODE_PRIVATE)
                           .edit()
                           .putString(ClockWidgetProvider.KEY_APP, item.pkg)
+                          .putString(ClockWidgetProvider.KEY_ACTION, ClockWidgetProvider.TAP_APP)
                           .apply();
 
                   // Com tela de configuração, o próprio app precisa desenhar o widget novo pela primeira vez
@@ -470,6 +497,121 @@ jobs:
               }
           }
           EOF_ARQUIVO
+          mkdir -p "$(dirname 'app/src/main/java/com/exemplo/relogiowidget/KeepAwakeService.java')"
+          cat > 'app/src/main/java/com/exemplo/relogiowidget/KeepAwakeService.java' <<'EOF_ARQUIVO'
+          package com.exemplo.relogiowidget;
+
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.app.Service;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.os.Build;
+          import android.os.IBinder;
+          import android.os.PowerManager;
+
+          /**
+           * Mantém a tela ligada enquanto estiver ativo. Cada toque no relógio (ou na notificação)
+           * liga ou desliga. A notificação fixa mostra o ícone na barra de status.
+           */
+          public class KeepAwakeService extends Service {
+
+              private static final String ACTION_TOGGLE = "com.exemplo.relogiowidget.TOGGLE_AWAKE";
+              private static final String CHANNEL_ID = "tela_ligada";
+              private static final int NOTIFICATION_ID = 1;
+
+              private static volatile boolean running = false;
+
+              private PowerManager.WakeLock wakeLock;
+
+              static boolean isRunning() {
+                  return running;
+              }
+
+              /** PendingIntent que liga/desliga a tela sempre ligada. */
+              static PendingIntent toggleIntent(Context context) {
+                  Intent intent = new Intent(context, KeepAwakeService.class);
+                  intent.setAction(ACTION_TOGGLE);
+                  int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+                  if (Build.VERSION.SDK_INT >= 23) {
+                      flags |= PendingIntent.FLAG_IMMUTABLE;
+                  }
+                  if (Build.VERSION.SDK_INT >= 26) {
+                      return PendingIntent.getForegroundService(context, 0, intent, flags);
+                  }
+                  return PendingIntent.getService(context, 0, intent, flags);
+              }
+
+              @Override
+              public int onStartCommand(Intent intent, int flags, int startId) {
+                  // Exigido pelo Android 8+ quando o serviço é iniciado em primeiro plano
+                  startForeground(NOTIFICATION_ID, buildNotification());
+
+                  if (running) {
+                      turnOff();
+                  } else {
+                      turnOn();
+                  }
+                  return START_NOT_STICKY;
+              }
+
+              private void turnOn() {
+                  PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                  wakeLock = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "relogiowidget:tela");
+                  wakeLock.setReferenceCounted(false);
+                  wakeLock.acquire();
+                  running = true;
+              }
+
+              private void turnOff() {
+                  releaseLock();
+                  running = false;
+                  stopForeground(true);
+                  stopSelf();
+              }
+
+              private void releaseLock() {
+                  if (wakeLock != null && wakeLock.isHeld()) {
+                      wakeLock.release();
+                  }
+                  wakeLock = null;
+              }
+
+              @Override
+              public void onDestroy() {
+                  releaseLock();
+                  running = false;
+                  super.onDestroy();
+              }
+
+              @Override
+              public IBinder onBind(Intent intent) {
+                  return null;
+              }
+
+              private Notification buildNotification() {
+                  Notification.Builder builder;
+                  if (Build.VERSION.SDK_INT >= 26) {
+                      NotificationManager nm =
+                              (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                      nm.createNotificationChannel(new NotificationChannel(
+                              CHANNEL_ID, getString(R.string.tela_ligada), NotificationManager.IMPORTANCE_LOW));
+                      builder = new Notification.Builder(this, CHANNEL_ID);
+                  } else {
+                      builder = new Notification.Builder(this);
+                      builder.setPriority(Notification.PRIORITY_LOW);
+                  }
+                  builder.setSmallIcon(R.drawable.ic_stat_awake)
+                          .setContentTitle(getString(R.string.tela_ligada))
+                          .setContentText(getString(R.string.toque_para_desligar))
+                          .setOngoing(true)
+                          .setContentIntent(toggleIntent(this));   // tocar na notificação desliga
+                  return builder.build();
+              }
+          }
+          EOF_ARQUIVO
           mkdir -p "$(dirname 'app/src/main/java/com/exemplo/relogiowidget/SettingsActivity.java')"
           cat > 'app/src/main/java/com/exemplo/relogiowidget/SettingsActivity.java' <<'EOF_ARQUIVO'
           package com.exemplo.relogiowidget;
@@ -483,14 +625,19 @@ jobs:
           import android.view.View;
           import android.widget.Button;
           import android.widget.EditText;
+          import android.widget.RadioGroup;
           import android.widget.Toast;
 
-          /** Tela do ícone do app: escolher o app do toque e ajustar a posição do relógio em pixels. */
+          /**
+           * Tela do ícone do app: o que o toque faz (abrir app, nada ou tela sempre ligada),
+           * qual app abrir e a posição do relógio em pixels.
+           */
           public class SettingsActivity extends Activity {
 
               private static final int REQ_PICK = 1;
               private static final int LIMIT = 5000;   // limite de segurança do deslocamento
 
+              private RadioGroup tapGroup;
               private Button appButton;
               private EditText offsetX;
               private EditText offsetY;
@@ -500,6 +647,7 @@ jobs:
                   super.onCreate(savedInstanceState);
                   setContentView(R.layout.activity_settings);
 
+                  tapGroup = (RadioGroup) findViewById(R.id.tap_group);
                   appButton = (Button) findViewById(R.id.btn_app);
                   offsetX = (EditText) findViewById(R.id.offset_x);
                   offsetY = (EditText) findViewById(R.id.offset_y);
@@ -507,6 +655,7 @@ jobs:
                   SharedPreferences prefs = prefs();
                   offsetX.setText(String.valueOf(prefs.getInt(ClockWidgetProvider.KEY_OFFSET_X, 0)));
                   offsetY.setText(String.valueOf(prefs.getInt(ClockWidgetProvider.KEY_OFFSET_Y, 0)));
+                  showCurrentAction();
                   showCurrentApp();
 
                   appButton.setOnClickListener(new View.OnClickListener() {
@@ -529,12 +678,25 @@ jobs:
               protected void onActivityResult(int requestCode, int resultCode, Intent data) {
                   super.onActivityResult(requestCode, resultCode, data);
                   if (requestCode == REQ_PICK) {
+                      // Escolher um app já salva e marca "Abrir um app"
+                      showCurrentAction();
                       showCurrentApp();
                   }
               }
 
               private SharedPreferences prefs() {
                   return getSharedPreferences(ClockWidgetProvider.PREFS, Context.MODE_PRIVATE);
+              }
+
+              private void showCurrentAction() {
+                  String action = prefs().getString(ClockWidgetProvider.KEY_ACTION, ClockWidgetProvider.TAP_APP);
+                  if (ClockWidgetProvider.TAP_NONE.equals(action)) {
+                      tapGroup.check(R.id.rb_none);
+                  } else if (ClockWidgetProvider.TAP_AWAKE.equals(action)) {
+                      tapGroup.check(R.id.rb_awake);
+                  } else {
+                      tapGroup.check(R.id.rb_app);
+                  }
               }
 
               private void showCurrentApp() {
@@ -552,10 +714,27 @@ jobs:
               }
 
               private void save() {
+                  String action;
+                  int checked = tapGroup.getCheckedRadioButtonId();
+                  if (checked == R.id.rb_none) {
+                      action = ClockWidgetProvider.TAP_NONE;
+                  } else if (checked == R.id.rb_awake) {
+                      action = ClockWidgetProvider.TAP_AWAKE;
+                  } else {
+                      action = ClockWidgetProvider.TAP_APP;
+                  }
+
                   prefs().edit()
+                          .putString(ClockWidgetProvider.KEY_ACTION, action)
                           .putInt(ClockWidgetProvider.KEY_OFFSET_X, parse(offsetX))
                           .putInt(ClockWidgetProvider.KEY_OFFSET_Y, parse(offsetY))
                           .apply();
+
+                  // Saiu do modo "tela ligada": desliga a trava para não ficar presa sem como desligar
+                  if (!ClockWidgetProvider.TAP_AWAKE.equals(action) && KeepAwakeService.isRunning()) {
+                      stopService(new Intent(this, KeepAwakeService.class));
+                  }
+
                   ClockWidgetProvider.updateAll(this);
                   Toast.makeText(this, R.string.salvo, Toast.LENGTH_SHORT).show();
               }
@@ -595,6 +774,26 @@ jobs:
                   android:strokeWidth="3" />
           </vector>
           EOF_ARQUIVO
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_stat_awake.xml')"
+          cat > 'app/src/main/res/drawable/ic_stat_awake.xml' <<'EOF_ARQUIVO'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportHeight="24"
+              android:viewportWidth="24">
+
+              <!-- Ícone da barra de status: tela (monitor) -->
+              <path
+                  android:pathData="M4,5 H20 V16 H4 Z"
+                  android:strokeColor="#FFFFFF"
+                  android:strokeLineJoin="round"
+                  android:strokeWidth="2" />
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M8,19 H16 V21 H8 Z" />
+          </vector>
+          EOF_ARQUIVO
           mkdir -p "$(dirname 'app/src/main/res/layout/activity_settings.xml')"
           cat > 'app/src/main/res/layout/activity_settings.xml' <<'EOF_ARQUIVO'
           <?xml version="1.0" encoding="utf-8"?>
@@ -611,9 +810,45 @@ jobs:
                   <TextView
                       android:layout_width="match_parent"
                       android:layout_height="wrap_content"
-                      android:text="@string/rotulo_app"
+                      android:text="@string/rotulo_toque"
                       android:textSize="16sp"
                       android:textStyle="bold" />
+
+                  <RadioGroup
+                      android:id="@+id/tap_group"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content">
+
+                      <RadioButton
+                          android:id="@+id/rb_app"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:text="@string/toque_app" />
+
+                      <RadioButton
+                          android:id="@+id/rb_none"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:text="@string/toque_nada" />
+
+                      <RadioButton
+                          android:id="@+id/rb_awake"
+                          android:layout_width="match_parent"
+                          android:layout_height="wrap_content"
+                          android:text="@string/toque_tela" />
+                  </RadioGroup>
+
+                  <TextView
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:layout_marginBottom="12dp"
+                      android:text="@string/explicacao_tela"
+                      android:textSize="13sp" />
+
+                  <TextView
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="@string/rotulo_app" />
 
                   <Button
                       android:id="@+id/btn_app"
@@ -741,13 +976,20 @@ jobs:
               <string name="widget_name">Relógio digital</string>
               <string name="escolha_app">Abrir ao tocar:</string>
               <string name="escolher_app">Escolher app…</string>
-              <string name="rotulo_app">Ao tocar no relógio, abrir:</string>
+              <string name="rotulo_toque">Ao tocar no relógio:</string>
+              <string name="toque_app">Abrir um app</string>
+              <string name="toque_nada">Não fazer nada</string>
+              <string name="toque_tela">Manter a tela ligada (liga e desliga a cada toque)</string>
+              <string name="explicacao_tela">Com a tela ligada, aparece um ícone na barra de status e a tela não apaga sozinha. Toque no relógio de novo, ou na notificação, para desligar.</string>
+              <string name="rotulo_app">App que será aberto:</string>
               <string name="rotulo_posicao">Posição do relógio (em pixels)</string>
               <string name="explicacao_posicao">Positivo move para a direita (horizontal) ou para baixo (vertical). Negativo move para a esquerda ou para cima. Use 0 para centralizar.</string>
               <string name="horizontal">Horizontal (X)</string>
               <string name="vertical">Vertical (Y)</string>
               <string name="salvar">Salvar</string>
               <string name="salvo">Salvo!</string>
+              <string name="tela_ligada">Tela ligada</string>
+              <string name="toque_para_desligar">Toque para a tela voltar a apagar sozinha</string>
           </resources>
           EOF_ARQUIVO
           mkdir -p "$(dirname 'app/src/main/res/xml/clock_widget_info.xml')"
@@ -802,7 +1044,14 @@ jobs:
       - name: Compilar
         run: gradle assembleDebug
 
+      - name: Nomear o APK com a versão
+        run: |
+          VERSAO=$(grep -oP 'versionName "\K[^"]+' app/build.gradle)
+          mkdir -p saida
+          cp app/build/outputs/apk/debug/app-debug.apk "saida/relógio_90_${VERSAO}.apk"
+          echo "VERSAO=${VERSAO}" >> "$GITHUB_ENV"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: RelogioWidget-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: relógio_90_${{ env.VERSAO }}
+          path: saida/relógio_90_${{ env.VERSAO }}.apk
