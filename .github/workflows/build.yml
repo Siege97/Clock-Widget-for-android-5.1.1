@@ -43,8 +43,8 @@ jobs:
                   applicationId "com.exemplo.relogiowidget"
                   minSdk 22          // Android 5.1.1
                   targetSdk 34
-                  versionCode 6
-                  versionName "3.2"
+                  versionCode 7
+                  versionName "3.3"
               }
 
               buildTypes {
@@ -119,8 +119,6 @@ jobs:
                       android:label="@string/widget_name">
                       <intent-filter>
                           <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                          <action android:name="android.intent.action.TIME_SET" />
-                          <action android:name="android.intent.action.TIMEZONE_CHANGED" />
                       </intent-filter>
                       <meta-data
                           android:name="android.appwidget.provider"
@@ -135,7 +133,6 @@ jobs:
           cat > 'app/src/main/java/com/exemplo/relogiowidget/ClockWidgetProvider.java' <<'EOF_ARQUIVO'
           package com.exemplo.relogiowidget;
 
-          import android.app.AlarmManager;
           import android.app.PendingIntent;
           import android.appwidget.AppWidgetManager;
           import android.appwidget.AppWidgetProvider;
@@ -144,26 +141,21 @@ jobs:
           import android.content.Intent;
           import android.content.SharedPreferences;
           import android.content.res.Configuration;
-          import android.graphics.Bitmap;
-          import android.graphics.Canvas;
-          import android.graphics.Color;
           import android.graphics.Paint;
           import android.graphics.Rect;
           import android.graphics.Typeface;
           import android.os.Build;
           import android.os.Bundle;
-          import android.text.format.DateFormat;
+          import android.util.TypedValue;
           import android.widget.RemoteViews;
-
-          import java.text.SimpleDateFormat;
-          import java.util.Date;
-          import java.util.Locale;
 
           /**
            * Relógio digital girado 90 graus para a direita.
            *
-           * Widgets não podem girar views no Android 5.1, então a hora é desenhada
-           * já girada dentro de um Bitmap do tamanho do widget, trocado a cada minuto por um alarme.
+           * A hora é um TextClock (o sistema atualiza sozinho, sem alarme) girado por
+           * android:rotation no layout. Este código só ajusta o tamanho da letra para caber
+           * no widget, a posição (offset em pixels) e o que acontece ao tocar.
+           * Ele só roda quando o widget é criado, redimensionado ou quando você salva ajustes.
            */
           public class ClockWidgetProvider extends AppWidgetProvider {
 
@@ -177,57 +169,26 @@ jobs:
               static final String TAP_NONE = "none";           // não faz nada
               static final String TAP_AWAKE = "awake";         // liga/desliga "tela sempre ligada"
 
-              private static final String ACTION_TICK = "com.exemplo.relogiowidget.TICK";
-
               // ---- Ajustes visuais (mude aqui) ----
-              private static final int TEXT_COLOR = Color.WHITE;
               private static final float MARGIN_DP = 4f;       // folga entre o relógio e a borda do widget
               private static final int DEFAULT_W_DP = 70;      // usados se o launcher não informar o tamanho
               private static final int DEFAULT_H_DP = 250;
-              private static final int MAX_BITMAP_SIDE = 1600; // limite de segurança de memória
 
               @Override
               public void onUpdate(Context context, AppWidgetManager manager, int[] appWidgetIds) {
                   for (int id : appWidgetIds) {
                       update(context, manager, id);
                   }
-                  scheduleNextTick(context);
               }
 
               @Override
               public void onAppWidgetOptionsChanged(Context context, AppWidgetManager manager,
                                                     int appWidgetId, Bundle newOptions) {
-                  // O widget foi redimensionado: redesenha no novo tamanho
+                  // O widget foi redimensionado: recalcula o tamanho da letra
                   update(context, manager, appWidgetId);
               }
 
-              @Override
-              public void onReceive(Context context, Intent intent) {
-                  super.onReceive(context, intent);
-                  String action = intent.getAction();
-                  if (ACTION_TICK.equals(action)
-                          || Intent.ACTION_TIME_CHANGED.equals(action)
-                          || Intent.ACTION_TIMEZONE_CHANGED.equals(action)) {
-                      if (updateAll(context) > 0) {
-                          scheduleNextTick(context);
-                      }
-                  }
-              }
-
-              @Override
-              public void onEnabled(Context context) {
-                  scheduleNextTick(context);
-              }
-
-              @Override
-              public void onDisabled(Context context) {
-                  AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
-                  if (am != null) {
-                      am.cancel(tickIntent(context));
-                  }
-              }
-
-              /** Redesenha todos os widgets na tela. Devolve quantos são. */
+              /** Atualiza todos os widgets na tela. Devolve quantos são. */
               static int updateAll(Context context) {
                   AppWidgetManager manager = AppWidgetManager.getInstance(context);
                   int[] ids = manager.getAppWidgetIds(new ComponentName(context, ClockWidgetProvider.class));
@@ -237,14 +198,25 @@ jobs:
                   return ids.length;
               }
 
-              /** Redesenha um widget: hora girada + toque que abre o app escolhido. */
+              /** Aplica tamanho da letra, posição e ação do toque em um widget. */
               static void update(Context context, AppWidgetManager manager, int id) {
                   SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                  int dx = prefs.getInt(KEY_OFFSET_X, 0);
+                  int dy = prefs.getInt(KEY_OFFSET_Y, 0);
 
                   RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.widget_clock);
-                  views.setImageViewBitmap(R.id.clock, renderTime(context, manager, id,
-                          prefs.getInt(KEY_OFFSET_X, 0), prefs.getInt(KEY_OFFSET_Y, 0)));
 
+                  // Tamanho da letra: o maior que cabe, já descontando o espaço do deslocamento
+                  views.setTextViewTextSize(R.id.clock, TypedValue.COMPLEX_UNIT_PX,
+                          fitTextSize(context, manager, id, dx, dy));
+
+                  // Posição: o relógio fica centralizado na área sem padding. Padding de 2*d de um lado
+                  // desloca o centro em d pixels (positivo = direita / baixo).
+                  views.setViewPadding(R.id.root,
+                          Math.max(0, 2 * dx), Math.max(0, 2 * dy),
+                          Math.max(0, -2 * dx), Math.max(0, -2 * dy));
+
+                  // Ação do toque
                   String action = prefs.getString(KEY_ACTION, TAP_APP);
                   PendingIntent pending = null;
                   if (TAP_AWAKE.equals(action)) {
@@ -276,10 +248,10 @@ jobs:
               }
 
               /**
-               * Desenha "HH:mm" girado 90 graus no sentido horário, centralizado no widget
-               * e deslocado por (dx, dy) pixels. Positivo = direita / baixo.
+               * Maior tamanho de letra (em pixels) em que "00:00", girado, cabe no widget.
+               * Depois de girar, o comprimento do texto vira a altura e a altura dos dígitos vira a largura.
                */
-              private static Bitmap renderTime(Context context, AppWidgetManager manager, int id,
+              private static float fitTextSize(Context context, AppWidgetManager manager, int id,
                                                int dx, int dy) {
                   float density = context.getResources().getDisplayMetrics().density;
                   boolean landscape = context.getResources().getConfiguration().orientation
@@ -301,73 +273,26 @@ jobs:
                       wDp = DEFAULT_W_DP;
                       hDp = DEFAULT_H_DP;
                   }
-                  int width = Math.min(MAX_BITMAP_SIDE, Math.max(1, Math.round(wDp * density)));
-                  int height = Math.min(MAX_BITMAP_SIDE, Math.max(1, Math.round(hDp * density)));
-
-                  String pattern = DateFormat.is24HourFormat(context) ? "HH:mm" : "hh:mm";
-                  String text = new SimpleDateFormat(pattern, Locale.US).format(new Date());
 
                   Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-                  paint.setColor(TEXT_COLOR);
                   paint.setTypeface(Typeface.DEFAULT);
-
-                  // Escolhe o maior tamanho de letra que cabe, medido com "00:00" (tamanho estável)
                   final float base = 100f;
                   paint.setTextSize(base);
                   Rect digit = new Rect();
                   paint.getTextBounds("0", 0, 1, digit);
-                  float refLength = paint.measureText("00:00");     // vira a altura depois de girar
-                  float margin = MARGIN_DP * density;
+                  float refLength = paint.measureText("00:00");
+
                   // Reserva espaço para o deslocamento (nos dois lados, pois o relógio é centralizado),
                   // assim a hora nunca passa da borda do widget
-                  float availWidth = Math.max(1f, width - 2 * margin - 2 * Math.abs(dx));
-                  float availHeight = Math.max(1f, height - 2 * margin - 2 * Math.abs(dy));
+                  float margin = MARGIN_DP * density;
+                  float availWidth = Math.max(1f, wDp * density - 2 * margin - 2 * Math.abs(dx));
+                  float availHeight = Math.max(1f, hDp * density - 2 * margin - 2 * Math.abs(dy));
                   float scale = Math.min(availWidth / Math.max(1, digit.height()),
                           availHeight / Math.max(1f, refLength));
                   if (scale <= 0f) {
                       scale = 1f;
                   }
-                  paint.setTextSize(base * scale);
-                  paint.getTextBounds("0", 0, 1, digit);
-
-                  Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-                  Canvas canvas = new Canvas(bitmap);
-                  canvas.translate(width / 2f + dx, height / 2f + dy);
-                  canvas.rotate(90);
-                  float x = -paint.measureText(text) / 2f;
-                  float y = -(digit.top + digit.bottom) / 2f;
-                  canvas.drawText(text, x, y, paint);
-                  return bitmap;
-              }
-
-              // ---- Alarme que dispara na virada de cada minuto ----
-
-              private static PendingIntent tickIntent(Context context) {
-                  Intent intent = new Intent(context, ClockWidgetProvider.class);
-                  intent.setAction(ACTION_TICK);
-                  int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-                  if (Build.VERSION.SDK_INT >= 23) {
-                      flags |= PendingIntent.FLAG_IMMUTABLE;
-                  }
-                  return PendingIntent.getBroadcast(context, 0, intent, flags);
-              }
-
-              static void scheduleNextTick(Context context) {
-                  AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
-                  if (am == null) return;
-
-                  long next = (System.currentTimeMillis() / 60000L + 1) * 60000L + 300L;
-                  PendingIntent pending = tickIntent(context);
-                  try {
-                      if (Build.VERSION.SDK_INT >= 23) {
-                          am.setExactAndAllowWhileIdle(AlarmManager.RTC, next, pending);
-                      } else {
-                          am.setExact(AlarmManager.RTC, next, pending);
-                      }
-                  } catch (SecurityException e) {
-                      // Android 12+ sem permissão de alarme exato: usa alarme aproximado
-                      am.set(AlarmManager.RTC, next, pending);
-                  }
+                  return base * scale;
               }
           }
           EOF_ARQUIVO
@@ -471,7 +396,6 @@ jobs:
                       ClockWidgetProvider.update(this, AppWidgetManager.getInstance(this), appWidgetId);
                   }
                   ClockWidgetProvider.updateAll(this);
-                  ClockWidgetProvider.scheduleNextTick(this);
 
                   setResult(RESULT_OK,
                           new Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId));
@@ -959,12 +883,26 @@ jobs:
               android:layout_width="match_parent"
               android:layout_height="match_parent">
 
-              <ImageView
+              <!--
+                  O relógio é um TextClock comum, atualizado pelo próprio sistema (sem alarme).
+                  android:rotation="90" gira 90 graus para a direita em volta do centro.
+                  A largura é fixa e grande de propósito: antes de girar, o texto fica "deitado"
+                  e precisa de espaço para ser medido; depois de girar ele cabe na altura do widget.
+                  O tamanho da letra e a posição são ajustados pelo código (ClockWidgetProvider).
+              -->
+              <TextClock
                   android:id="@+id/clock"
-                  android:layout_width="match_parent"
-                  android:layout_height="match_parent"
-                  android:contentDescription="@string/widget_name"
-                  android:scaleType="fitCenter" />
+                  android:layout_width="1000dp"
+                  android:layout_height="wrap_content"
+                  android:layout_gravity="center"
+                  android:format12Hour="hh:mm"
+                  android:format24Hour="HH:mm"
+                  android:gravity="center"
+                  android:includeFontPadding="false"
+                  android:rotation="90"
+                  android:singleLine="true"
+                  android:textColor="#FFFFFF"
+                  android:textSize="48sp" />
 
           </FrameLayout>
           EOF_ARQUIVO
