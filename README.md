@@ -7,7 +7,7 @@ Widget de relógio digital para a tela inicial do Android 5.1.1 (API 22) ou mais
 - Relógio com **rotação** de 0°, 90° (padrão), 180° ou 270°.
 - **Fonte** entre 10 famílias do sistema, **cor** (10 prontas ou código HEX) e **opacidade** (10% a 100%).
 - **Posição** ajustável em pixels (horizontal e vertical).
-- **Ao tocar**: abrir um app à escolha, não fazer nada, ou manter a tela ligada (liga e desliga a cada toque, com um cadeado na barra de status).
+- **Ao tocar**: abrir um app à escolha, não fazer nada, ou manter a tela ligada (liga e desliga a cada toque, com cadeado na barra de status, aviso na tela e vibração).
 - Os ajustes ficam no ícone **Relógio Widget** da lista de apps.
 
 ## Como gerar o APK

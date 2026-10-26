@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Ícone da barra de status: cadeado fechado deitado (vetorizado a partir da imagem enviada).
+    O Android pinta ícones de notificação só pelo formato (silhueta), por isso é branco com transparência.
+    O desenho original tem 512 x 512; a área de 614,4 deixa 2dp de folga em volta dos 24dp
+    (o cadeado ocupa 20dp de largura) e o grupo centraliza o desenho nela.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportHeight="614.4"
+    android:viewportWidth="614.4">
+
+    <group
+        android:translateX="51.2"
+        android:translateY="51.2">
+
+        <!-- Corpo (com o furo da fechadura, desenhado no sentido contrário) e haste em "D" com o vão aberto -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M0,67 H287 V445 H0 Z M79,229.9 L79,282.1 L157.6,274.2 A34.4,34.4 0 1 0 157.6,237.8 Z M287,100.2 H356.6 A155.8,155.8 0 0 1 356.6,411.8 H287 Z M287,160 V352 H356.6 A96,96 0 0 0 356.6,160 Z" />
+    </group>
+</vector>

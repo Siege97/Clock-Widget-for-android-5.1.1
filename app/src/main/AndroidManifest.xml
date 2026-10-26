@@ -3,6 +3,7 @@
 
     <!-- Manter a tela ligada: trava de tela + serviço em primeiro plano (com ícone na barra de status) -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 

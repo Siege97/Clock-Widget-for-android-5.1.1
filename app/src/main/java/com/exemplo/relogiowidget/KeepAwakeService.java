@@ -10,6 +10,8 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.os.Vibrator;
+import android.widget.Toast;
 
 /**
  * Mantém a tela ligada enquanto estiver ativo. Cada toque no relógio (ou na notificação)
@@ -62,11 +64,13 @@ public class KeepAwakeService extends Service {
         wakeLock.setReferenceCounted(false);
         wakeLock.acquire();
         running = true;
+        feedback(true);
     }
 
     private void turnOff() {
         releaseLock();
         running = false;
+        feedback(false);
         stopForeground(true);
         stopSelf();
     }
@@ -81,7 +85,11 @@ public class KeepAwakeService extends Service {
     @Override
     public void onDestroy() {
         releaseLock();
-        running = false;
+        if (running) {
+            // Desligado de fora (por exemplo, ao salvar os ajustes com outro tipo de toque)
+            running = false;
+            feedback(false);
+        }
         super.onDestroy();
     }
 
@@ -90,13 +98,28 @@ public class KeepAwakeService extends Service {
         return null;
     }
 
+    /** Avisa a mudança: mensagem na tela e vibração (1 curta ao ativar, 2 curtas ao voltar ao normal). */
+    private void feedback(boolean active) {
+        Toast.makeText(getApplicationContext(),
+                active ? R.string.aviso_tela_ativada : R.string.aviso_modo_normal,
+                Toast.LENGTH_SHORT).show();
+        try {
+            Vibrator vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            if (vibrator != null && vibrator.hasVibrator()) {
+                vibrator.vibrate(active ? new long[]{0, 100} : new long[]{0, 100, 100, 100}, -1);
+            }
+        } catch (SecurityException e) {
+            // sem permissão de vibração: fica só a mensagem
+        }
+    }
+
     private Notification buildNotification() {
         Notification.Builder builder;
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm =
                     (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             nm.createNotificationChannel(new NotificationChannel(
-                    CHANNEL_ID, getString(R.string.tela_ligada), NotificationManager.IMPORTANCE_LOW));
+                    CHANNEL_ID, getString(R.string.canal_tela), NotificationManager.IMPORTANCE_LOW));
             builder = new Notification.Builder(this, CHANNEL_ID);
         } else {
             builder = new Notification.Builder(this);

@@ -9,7 +9,7 @@
     <string name="toque_app">Abrir um app</string>
     <string name="toque_nada">Não fazer nada</string>
     <string name="toque_tela">Manter a tela ligada (liga e desliga a cada toque)</string>
-    <string name="explicacao_tela">Com a tela ligada, aparece um ícone de cadeado na barra de status e a tela não apaga sozinha. Toque no relógio de novo, ou na notificação, para desligar.</string>
+    <string name="explicacao_tela">Com a suspensão de tela desativada, aparece um cadeado na barra de status e a tela não apaga sozinha. Cada toque mostra um aviso e vibra: uma vez ao ativar e duas ao voltar ao modo normal. Toque no relógio de novo, ou na notificação, para voltar ao modo normal.</string>
     <string name="rotulo_app">App que será aberto:</string>
 
     <string name="rotulo_posicao">Posição do relógio (em pixels)</string>
@@ -54,6 +54,9 @@
 
     <string name="salvar">Salvar</string>
     <string name="salvo">Salvo!</string>
-    <string name="tela_ligada">Tela ligada</string>
-    <string name="toque_para_desligar">Toque para a tela voltar a apagar sozinha</string>
+    <string name="tela_ligada">Suspensão de tela DESATIVADA</string>
+    <string name="toque_para_desligar">Toque para voltar ao modo normal</string>
+    <string name="canal_tela">Tela sempre ligada</string>
+    <string name="aviso_tela_ativada">Suspensão de tela DESATIVADA</string>
+    <string name="aviso_modo_normal">Modo NORMAL</string>
 </resources>
